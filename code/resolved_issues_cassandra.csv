@@ -1,0 +1,51 @@
+Bug ID,Bug Summary,Bug Description
+CASSANDRA-19880,"With enableTracing set to true, the unset() method of a BoundStatement for a map type field failed during execution","After creating bound statement, performing UNSET on collection type (e.g. map), and enabling tracing, request fails on C* side with:
+{code:java}
+java.lang.IndexOutOfBoundsException: null
+	at java.base/java.nio.Buffer.checkIndex(Buffer.java:693)
+	at java.base/java.nio.HeapByteBuffer.getInt(HeapByteBuffer.java:406)
+	at org.apache.cassandra.utils.ByteBufferUtil.toInt(ByteBufferUtil.java:476)
+	at org.apache.cassandra.db.marshal.ByteBufferAccessor.toInt(ByteBufferAccessor.java:208)
+	at org.apache.cassandra.db.marshal.ByteBufferAccessor.toInt(ByteBufferAccessor.java:42)
+	at org.apache.cassandra.serializers.CollectionSerializer.readCollectionSize(CollectionSerializer.java:147)
+	at org.apache.cassandra.cql3.CQL3Type$Collection.toCQLLiteral(CQL3Type.java:222)
+	at org.apache.cassandra.transport.messages.ExecuteMessage.traceQuery(ExecuteMessage.java:223)
+	at org.apache.cassandra.transport.messages.ExecuteMessage.execute(ExecuteMessage.java:155)
+	at org.apache.cassandra.transport.Message$Request.execute(Message.java:259)
+	at org.apache.cassandra.transport.Dispatcher.processRequest(Dispatcher.java:416)
+	at org.apache.cassandra.transport.Dispatcher.processRequest(Dispatcher.java:435)
+	at org.apache.cassandra.transport.Dispatcher.processRequest(Dispatcher.java:462)
+	at org.apache.cassandra.transport.Dispatcher$RequestProcessor.run(Dispatcher.java:307)
+	at org.apache.cassandra.concurrent.FutureTask$1.call(FutureTask.java:99)
+	at org.apache.cassandra.concurrent.FutureTask.call(FutureTask.java:61)
+	at org.apache.cassandra.concurrent.FutureTask.run(FutureTask.java:71)
+	at org.apache.cassandra.concurrent.SEPWorker.run(SEPWorker.java:143)
+	at io.netty.util.concurrent.FastThreadLocalRunnable.run(FastThreadLocalRunnable.java:30)
+	at java.base/java.lang.Thread.run(Thread.java:829) {code}"
+CASSANDRA-19871,Add size to the segment index for safer journal reads,
+CASSANDRA-19865,"Fix CompacctionAccordIteratorTest, switch Journal to streaming serialization",
+CASSANDRA-19864,Switch to infinite loop executor instead of a while-loop thread,DelayedRequestProcessor was causing simulation failures because it was running using raw threads rather than an executor.
+CASSANDRA-19857,CommandsForRanges does not support slice which cause over returned data being sent,"This is split from CASSANDRA-19769
+
+CommandsForRanges returns the data for the whole node but is processed per shard (which has a subset of data). Normally we use “.slice” to shrink the results to match the shard, but this is missing in CommandsForRanges, which cause it to return txn and ranges not present for the shard"
+CASSANDRA-19856,Add a concept for retrying messages,"This is split from CASSANDRA-19769
+
+Repair and TCM both have their own retry logic for messages, which makes it harder for new usages; we should refactor so there is a simple way to retry messages that covers both users."
+CASSANDRA-19855,txns that update a static row when the desired row doesn't exist leads to an error,"This is split from CASSANDRA-19769
+
+If the table has a static row and the txn does += on a non-static column and = on a static column, then accord fails"
+CASSANDRA-19854,Make JIRA ticket names in commit messages to be links ,
+CASSANDRA-19849,Test Failure: org.apache.cassandra.tcm.sequences.ProgressBarrierTest.testProgressBarrier,"Seen on current trunk here:
+https://app.circleci.com/pipelines/github/ekaterinadimitrova2/cassandra/2726/workflows/2d5c888b-d5b8-4f72-9fcb-9e7ae0887940/jobs/61321/tests
+{code:java}
+junit.framework.AssertionFailedError: Should have collected at least 15 nodes but got 14.
+RF: NtsReplicationFactor{map={datacenter1=5, datacenter2=5, datacenter3=5}}
+Replicas: [/127.0.0.1:7012, /127.0.0.2:7012, /127.0.0.3:7012, /127.0.0.4:7012, /127.0.0.5:7012, /127.0.0.6:7012, /127.0.0.7:7012, /127.0.0.8:7012, /127.0.0.9:7012, /127.0.0.10:7012, /127.0.0.11:7012, /127.0.0.12:7012, /127.0.0.13:7012, /127.0.0.14:7012]
+Nodes: [/127.0.0.1:7012, /127.0.0.2:7012, /127.0.0.3:7012, /127.0.0.4:7012, /127.0.0.5:7012, /127.0.0.6:7012, /127.0.0.7:7012, /127.0.0.8:7012, /127.0.0.9:7012, /127.0.0.10:7012, /127.0.0.11:7012, /127.0.0.12:7012, /127.0.0.13:7012, /127.0.0.14:7012]
+	at org.apache.cassandra.tcm.sequences.ProgressBarrierTest.testProgressBarrier(ProgressBarrierTest.java:176)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62)
+	at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+{code}
+"
+CASSANDRA-19846,Allow looking up local tables in nodetool getendpoints,"In versions before 5.1 we allow looking up the endpoints for local tables using {{nodetool getendpoints}} - we only return the local node, but some scripts might depend on this so we should support it in 5.1"

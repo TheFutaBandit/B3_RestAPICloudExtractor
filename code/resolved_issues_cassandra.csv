@@ -49,3 +49,1242 @@ Nodes: [/127.0.0.1:7012, /127.0.0.2:7012, /127.0.0.3:7012, /127.0.0.4:7012, /127
 {code}
 "
 CASSANDRA-19846,Allow looking up local tables in nodetool getendpoints,"In versions before 5.1 we allow looking up the endpoints for local tables using {{nodetool getendpoints}} - we only return the local node, but some scripts might depend on this so we should support it in 5.1"
+CASSANDRA-19845,Handle existing tables with non-expected table ids,"On upgrade we merge the existing tables with the pre-defined ones, but we only check if the tableid exists, we should also check the name of the table since the id can be defined by the user."
+CASSANDRA-19842,[Analytics] Consistency level check incorrectly passes when majority of the replica set is unavailable for write,"Consistency level check is performed before proceeding to bulk writing data. The check yields wrong results that when the majority of a replica set is unavailable, it still passes. Leading to writing data to replicas that cannot satisfy the desired consistency level. 
+
+The following is the test to prove the bug. The test sets all 3 instances in the replica set as blocked (unavailable), so the validation is expected to throw. But it does not. 
+
+{code:java}
+@Test
+void test()
+{
+    BulkWriterContext mockWriterContext = mock(BulkWriterContext.class);
+    ClusterInfo mockClusterInfo = mock(ClusterInfo.class);
+    when(mockWriterContext.cluster()).thenReturn(mockClusterInfo);
+
+    CassandraContext mockCassandraContext = mock(CassandraContext.class);
+    when(mockClusterInfo.getCassandraContext()).thenReturn(mockCassandraContext);
+    Map<String, String> replicationOptions = new HashMap<>();
+    replicationOptions.put(""class"", ""SimpleStrategy"");
+    replicationOptions.put(""replication_factor"", ""3"");
+    TokenRangeMapping<RingInstance> topology = CassandraClusterInfo.getTokenRangeReplicas(() -> mockSimpleTokenRangeReplicasResponse(10, 3),
+                                                                                          () -> Partitioner.Murmur3Partitioner,
+                                                                                          () -> new ReplicationFactor(replicationOptions),
+                                                                                          ringInstance -> {
+                                                                                              int nodeId = Integer.parseInt(ringInstance.ipAddress().replace(""localhost"", """"));
+                                                                                              return nodeId <= 2; // block nodes 0, 1, 2
+                                                                                          });
+    when(mockClusterInfo.getTokenRangeMapping(anyBoolean())).thenReturn(topology);
+
+    JobInfo mockJobInfo = mock(JobInfo.class);
+    UUID jobId = UUID.randomUUID();
+    when(mockJobInfo.getId()).thenReturn(jobId.toString());
+    when(mockJobInfo.getRestoreJobId()).thenReturn(jobId);
+    when(mockJobInfo.qualifiedTableName()).thenReturn(new QualifiedTableName(""testkeyspace"", ""testtable""));
+    when(mockJobInfo.getConsistencyLevel()).thenReturn(ConsistencyLevel.CL.QUORUM);
+    when(mockJobInfo.effectiveSidecarPort()).thenReturn(9043);
+    when(mockJobInfo.jobKeepAliveMinutes()).thenReturn(-1);
+    when(mockWriterContext.job()).thenReturn(mockJobInfo);
+
+    BulkWriteValidator writerValidator = new BulkWriteValidator(mockWriterContext, new ReplicaAwareFailureHandler<>(Partitioner.Murmur3Partitioner));
+    assertThatThrownBy(() -> writerValidator.validateClOrFail(topology))
+    .isExactlyInstanceOf(RuntimeException.class)
+    .hasMessageContaining(""Failed to load"");
+}
+{code}
+"
+CASSANDRA-19841,Memtable configs don't have defaults for each format supported,"We added support to change memtable and sstables via yaml but it seems we only added defaults for sstables and missed them for memtables.  We document recommended defaults in config/cassandra.yaml but that isn’t present in Config nor is it present in the resolution logic that translates the config to our maps, this means that anyone who defines their own yaml won’t have “skiplist”, “trie”, or “shardedskiplist” as default options to pick from and must know how to define them.
+
+To make it easier for users we should provide defaults that could be overridden by users, just like we did for SSTables"
+CASSANDRA-19839,Update Cassandra home page to include ASF events perma-link,"In a Slack conversation, Rich Bowen let us know that there is an ASF perma-link for ASF events. Adding this to the home page would let us promote the latest events without having to constantly update the web site.
+
+ 
+
+[https://www.apachecon.com/event-images/]
+
+ 
+
+Will also remove the Orbit link since that is no longer valid.
+
+ 
+
+ "
+CASSANDRA-19836,[Analytics] Fix NPE when writing UDT values,"When UDT field values are set to null, the bulk writer throws NPE, e.g. the stacktrace below. Although it is on the boolean type, the NPE can be thrown on all other types whenever the value is null.
+
+{code:java}
+Caused by: java.lang.NullPointerException
+  at org.apache.cassandra.spark.data.types.Boolean.setInnerValue(Boolean.java:91)
+  at org.apache.cassandra.spark.data.complex.CqlUdt.setInnerValue(CqlUdt.java:534)
+  at org.apache.cassandra.spark.data.complex.CqlUdt.toUserTypeValue(CqlUdt.java:522)
+  at org.apache.cassandra.spark.data.complex.CqlUdt.convertForCqlWriter(CqlUdt.java:169)
+  at org.apache.cassandra.spark.bulkwriter.RecordWriter.maybeConvertUdt(RecordWriter.java:450)
+  at org.apache.cassandra.spark.bulkwriter.RecordWriter.getBindValuesForColumns(RecordWriter.java:432)
+  at org.apache.cassandra.spark.bulkwriter.RecordWriter.writeRow(RecordWriter.java:415)
+  at org.apache.cassandra.spark.bulkwriter.RecordWriter.write(RecordWriter.java:202)
+{code}
+
+"
+CASSANDRA-19835,Memtable allocation type unslabbed_heap_buffers_logged will cause an assertion error for TrieMemtables and SegmentedTrieMemtables,"Config used
+
+{code}
+	---
+	partitioner: Murmur3Partitioner
+	commitlog_sync: periodic
+	commitlog_sync_period: 9000ms
+	commitlog_disk_access_mode: legacy
+	memtable_allocation_type: unslabbed_heap_buffers_logged
+	sstable:
+	  selected_format: big
+	disk_access_mode: standard
+{code}
+
+Error
+
+{code}
+Caused by: java.lang.AssertionError: null
+	at org.apache.cassandra.config.Config$MemtableAllocationType.toBufferType(Config.java:1206)
+	at org.apache.cassandra.index.sai.disk.v1.segment.SegmentTrieBuffer.<init>(SegmentTrieBuffer.java:48)
+	at org.apache.cassandra.index.sai.disk.v1.segment.SegmentBuilder$TrieSegmentBuilder.<init>(SegmentBuilder.java:83)
+	at org.apache.cassandra.index.sai.disk.v1.SSTableIndexWriter.newSegmentBuilder(SSTableIndexWriter.java:311)
+	at org.apache.cassandra.index.sai.disk.v1.SSTableIndexWriter.addTerm(SSTableIndexWriter.java:195)
+	at org.apache.cassandra.index.sai.disk.v1.SSTableIndexWriter.addRow(SSTableIndexWriter.java:99)
+	at org.apache.cassandra.index.sai.disk.StorageAttachedIndexWriter.addRow(StorageAttachedIndexWriter.java:257)
+	at org.apache.cassandra.index.sai.disk.StorageAttachedIndexWriter.nextUnfilteredCluster(StorageAttachedIndexWriter.java:131)
+{code}
+
+This was found by CASSANDRA-19833"
+CASSANDRA-19833,"Improve CQLTester to make it trivial to run the tests with different configs, and to add randomness to the test","When creating a test many authors default to hard coding values as the barrier to make the test generic feels too high; to lower this barrier we should add an extension class to CQLTester that enables randomized testing without having to worry about which framework to use.
+
+This should setup the single node cluster with different configs to improve coverage.
+
+Here is a sample error message when a test fails
+
+{code}
+java.lang.AssertionError: Property error detected:
+Config Seed: -3611771839852432544 -- To rerun do -Dcassandra.test.cqltester.fuzzed.seed.org.apache.cassandra.cql3.validation.operations.InsertTest=-3611771839852432544
+Config:
+	---
+	partitioner: OrderPreservingPartitioner
+	commitlog_sync: batch
+	commitlog_disk_access_mode: mmap_index_only
+	memtable_allocation_type: offheap_buffers
+	sstable:
+	  selected_format: bti
+	disk_access_mode: mmap
+	
+Error:
+	commitlog_disk_access_mode = mmap_index_only is not supported. Please use 'auto' when unsure.
+{code}
+
+And if the test fails
+
+{code}
+java.lang.AssertionError: Property error detected:
+Config Seed: -5023694648830703272 -- To rerun do -Dcassandra.test.cqltester.fuzzed.seed.org.apache.cassandra.cql3.validation.operations.InsertTest=-5023694648830703272
+Seed: -1088015559108807046 -- To rerun do -Dcassandra.test.cqltester.fuzzed.seed.org.apache.cassandra.cql3.validation.operations.InsertTest.testInsertZeroDuration=-1088015559108807046
+Config:
+	---
+	partitioner: OrderPreservingPartitioner
+	commitlog_sync: periodic
+	commitlog_sync_period: 10000ms
+	commitlog_disk_access_mode: direct
+	memtable_allocation_type: offheap_objects
+	sstable:
+	  selected_format: bti
+	disk_access_mode: mmap_index_only
+Caused by: java.lang.NullPointerException
+{code}"
+CASSANDRA-19830,Use default commitlog settings in test YAMLs,"Since nearly the beginning of the project, we've used {{commitlog_sync: batch}} in our test configurations. However, the default is periodic/10s. At a very high level, it seems like we should test the default configuration, and that might be enough of a reason to change this. In addition, we might get a bit of a reduction in testing duration out of the change, especially on older hardware."
+CASSANDRA-19827,[Analytics] Add job_timeout_seconds writer option,"Option to specify the timeout in seconds for bulk write jobs. By default, it is disabled.
+When JOB_TIMEOUT_SECONDS is specified, a job exceeding the timeout is:
+- successful when the desired consistency level is met
+- a failure otherwise"
+CASSANDRA-19823,Investigate timeouts in tests extending RandomIntersectionTester,
+CASSANDRA-19822,Family of org.apache.cassandra.repair tests fail on accord.utils.Property$PropertyError: Property error detected,"I noticed this started to fail recently in trunk.
+
+{code}
+  ✕ j17_utests_oa                                   15m 15s
+      org.apache.cassandra.repair.FailedAckTest failedAck
+      org.apache.cassandra.repair.FailingRepairFuzzTest failingRepair
+      org.apache.cassandra.repair.HappyPathFuzzTest happyPath
+      org.apache.cassandra.repair.SlowMessageFuzzTest slowMessages
+      org.apache.cassandra.repair.ConcurrentIrWithPreviewFuzzTest concurrentIrWithPreview
+{code}
+
+{code}
+accord.utils.Property$PropertyError: Property error detected:
+Seed = 3839006609844455027
+Examples = 10
+Pure = false
+Error: Rejecting access
+Values:
+	0 = accord.utils.DefaultRandom@1b64dba7
+
+
+	at accord.utils.Property$SingleBuilder.checkInternal(Property.java:242)
+	at accord.utils.Property$SingleBuilder.check(Property.java:226)
+	at accord.utils.Property$ForBuilder.check(Property.java:124)
+	at org.apache.cassandra.repair.FailedAckTest.failedAck(FailedAckTest.java:55)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62)
+	at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:566)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:50)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:47)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.internal.runners.statements.RunBefores.evaluate(RunBefores.java:26)
+	at org.junit.internal.runners.statements.RunAfters.evaluate(RunAfters.java:27)
+	at org.junit.rules.TestWatcher$1.evaluate(TestWatcher.java:55)
+	at org.junit.rules.RunRules.evaluate(RunRules.java:20)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:325)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:78)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:57)
+	at org.junit.runners.ParentRunner$3.run(ParentRunner.java:290)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:71)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:288)
+	at org.junit.runners.ParentRunner.access$000(ParentRunner.java:58)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:268)
+	at org.junit.internal.runners.statements.RunBefores.evaluate(RunBefores.java:26)
+	at org.junit.internal.runners.statements.RunAfters.evaluate(RunAfters.java:27)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:363)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:137)
+	at com.intellij.junit4.JUnit4IdeaTestRunner.startRunnerWithArgs(JUnit4IdeaTestRunner.java:69)
+	at com.intellij.rt.junit.IdeaTestRunner$Repeater$1.execute(IdeaTestRunner.java:38)
+	at com.intellij.rt.execution.junit.TestsRepeater.repeat(TestsRepeater.java:11)
+	at com.intellij.rt.junit.IdeaTestRunner$Repeater.startRunnerWithArgs(IdeaTestRunner.java:35)
+	at com.intellij.rt.junit.JUnitStarter.prepareStreamsAndStart(JUnitStarter.java:232)
+	at com.intellij.rt.junit.JUnitStarter.main(JUnitStarter.java:55)
+Caused by: java.lang.IllegalStateException: Rejecting access
+	at org.apache.cassandra.repair.FuzzTestBase$ClockAccess.checkAccess(FuzzTestBase.java:1465)
+	at org.apache.cassandra.repair.FuzzTestBase$ClockAccess.nanoTime(FuzzTestBase.java:1404)
+	at org.apache.cassandra.utils.Clock$Global.nanoTime(Clock.java:100)
+	at org.apache.cassandra.repair.consistent.LocalSessions.start(LocalSessions.java:357)
+	at org.apache.cassandra.service.ActiveRepairService.start(ActiveRepairService.java:274)
+	at org.apache.cassandra.repair.FuzzTestBase$Cluster$Node.<init>(FuzzTestBase.java:1121)
+	at org.apache.cassandra.repair.FuzzTestBase$Cluster.<init>(FuzzTestBase.java:741)
+	at org.apache.cassandra.repair.FailedAckTest.lambda$failedAck$2(FailedAckTest.java:56)
+	at accord.utils.Property$SingleBuilder.checkInternal(Property.java:238)
+	... 33 more
+{code}"
+CASSANDRA-19821,Prevent double closing SSTable writer,"Analytics uses `org.apache.cassandra.io.sstable.SSTableSimpleWriter` to produce SSTables. Its implementation allows to be closed multiple times. However, the subsequent calls to ""close"" cause exception. For example,
+
+
+{code:java}
+java.lang.RuntimeException: Last written key DecoratedKey(-3078932293011064831, 000022fd) >= current key DecoratedKey(-3078932293011064831, 000022fd) writing into nb-1-big-Data.db
+    	at org.apache.cassandra.io.sstable.format.big.BigTableWriter.beforeAppend(BigTableWriter.java:169)
+    	at org.apache.cassandra.io.sstable.format.big.BigTableWriter.append(BigTableWriter.java:208)
+    	at org.apache.cassandra.io.sstable.SimpleSSTableMultiWriter.append(SimpleSSTableMultiWriter.java:48)
+    	at org.apache.cassandra.io.sstable.SSTableTxnWriter.append(SSTableTxnWriter.java:57)
+    	at org.apache.cassandra.io.sstable.SSTableSimpleWriter.writePartition(SSTableSimpleWriter.java:152)
+    	at org.apache.cassandra.io.sstable.SSTableSimpleWriter.writeLastPartitionUpdate(SSTableSimpleWriter.java:125)
+    	at org.apache.cassandra.io.sstable.SSTableSimpleWriter.close(SSTableSimpleWriter.java:93)
+    	at org.apache.cassandra.io.sstable.CQLSSTableWriter.close(CQLSSTableWriter.java:337)
+{code}
+
+
+Cassandra analytics should prevent double closing the underlying writer."
+CASSANDRA-19820,Fix tests extending FuzzTestBase when running test-compression profile,"FuzzTestBase extends CQLTester.InMemory which uses jimfs filesystem instead of the real one. This does not play well with direct mode of commitlog_disk_access_mode. We fixed  this in CASSANDRA-19779 by always setting it to mmap. This does not work when we run tests in test-compression profile because then it expects ""standard"" mode and if fails on asserts.
+
+The solution to fix test-compression profile is to set commitlog_disk_access_mode to mmap only in case it was indeed resolved to direct and not every time."
+CASSANDRA-19819,Cassandra 4.1.5 on RedHat repo is no longer available and only version 4.1~alpha1-1 is available,"It looks like some configuration of the rpm repository for Cassandra 41x has changed and means only version 4.1~alpha1-1 is available.
+
+We're trying to build a Docker image using Cassandra 4.1.5 version and a few days back the build was working as expected. 2-3 days ago the build is now failing and it no longer works. Here's the error message:
+{code:java}
+No package cassandra-4.1.5-1 available. {code}
+Inspecting the repository [https://apache.jfrog.io/ui/native/cassandra-rpm/41x/] I can see that version 4.1.5 is listed, but it is not returned when executing yum search / yum list:
+{code:java}
+$ yum list cassandra --showduplicates
+Available Packages
+cassandra.noarch 4.1~alpha1-1
+cassandra cassandra.src 4.1~alpha1-1 cassandra{code}
+A series of files were modified on 2024-08-03 (five days ago) in the directory [https://apache.jfrog.io/ui/native/cassandra-rpm/41x/repodata] - could this be the change that caused this behaviour? We are now unable to install any version of Cassandra 4.1.x except the alpha release.
+{code:java}
+ $ cat /etc/yum.repos.d/cassandra.repo
+[cassandra]
+baseurl = https://redhat.cassandra.apache.org/41x/ 
+enabled = 1 
+gpgcheck = 1 
+gpgkey = https://downloads.apache.org/cassandra/KEYS 
+name = Apache Cassandra
+repo_gpgcheck = 1
+{code}"
+CASSANDRA-19818,Minor improvements in Cassandra shutdown and startup logs,"To improve a DBA experience the following log messages would be nice to add/adjust:
+ * on shutdown: an explicit message at the end of Cassandra shutdown
+ * on startup:
+ ** print the time spent to load prepared statements
+ ** print the time spent to load repair session information and the number of loaded session records
+ ** print the time spent to apply commit log
+
+It would help with assessment of possible delays in startup/shutdown of Cassandra. For example, recently I observed a delay in Cassandra startup and from logs it was not clear was it caused by loading of prepared statements or repair service init."
+CASSANDRA-19816,nodetoolResult failed in Cassandra Dtest before cluster upgrade but succeed after cluster upgrade,"*What happened*
+Cassandra `nodetoolResult` behaves differently in dtest `runbeforeClusterUpgrade` and `runAfterClusterUpgrade`.
+ 
+
+*How to reproduce:*
+Put the following test under `cassandra/test/distributed/org/apache/cassandra/distributed/upgrade/`, and build dtest jars for version `5.0-beta1` and `5.1`.
+{code:java}
+package org.apache.cassandra.distributed.upgrade;
+
+public class demoUpgradeTest extends UpgradeTestBase {
+    @Test
+    public void firstDemoTest() throws Throwable {
+        new TestCase()
+        .nodes(2)
+        .nodesToUpgrade(1)
+        .withConfig((cfg) -> cfg.with(Feature.NETWORK, Feature.GOSSIP))
+        .upgradesToCurrentFrom(v3X)
+        .setup((cluster) -> {
+            cluster.schemaChange(""CREATE TABLE "" + KEYSPACE + "".tbl (pk int, ck int, PRIMARY KEY (pk, ck))"");
+        })
+        .runbeforeClusterUpgrade((cluster) -> {
+	        cluster.get(1).nodetoolResult(""cms"", ""initialize"").asserts().success();
+        }).run();
+    }
+
+    @Test
+    public void secondDemoTest() throws Throwable {
+        new TestCase()
+        .nodes(2)
+        .nodesToUpgrade(1)
+        .withConfig((cfg) -> cfg.with(Feature.NETWORK, Feature.GOSSIP))
+        .upgradesToCurrentFrom(v3X)
+        .setup((cluster) -> {
+            cluster.schemaChange(""CREATE TABLE "" + KEYSPACE + "".tbl (pk int, ck int, PRIMARY KEY (pk, ck))"");
+        })
+        .runafterClusterUpgrade((cluster) -> {
+            cluster.get(1).nodetoolResult(""cms"", ""initialize"").asserts().success();
+        }).run();
+    }
+}{code}
+
+Run the test with:
+{code:java}
+$ ant test-jvm-dtest-some -Duse.jdk11=true -Dtest.name=org.apache.cassandra.distributed.upgrade.demoUpgradeTest{code}
+ 
+`secondDemoTest` passes, but `firstDemoTest` fails with the following output:
+ 
+{code:java}
+java.lang.AssertionError: Error in test '5.0-beta2 -> [5.1]' while upgrading to '5.1'; successful upgrades []
+ 
+at org.apache.cassandra.distributed.upgrade.UpgradeTestBase$TestCase.run(UpgradeTestBase.java:396)
+at org.apache.cassandra.distributed.upgrade.demoUpgradeTest.secondDemoTest(demoUpgradeTest.java:56)
+at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+        ...
+ 
+Caused by: java.lang.AssertionError: nodetool command [cms, initialize] was not successful
+stdout:
+nodetool: Found unexpected parameters: [cms, initialize]
+See 'nodetool help' or 'nodetool help <command>'.
+ 
+stderr:
+ 
+Notifications:
+Error:
+io.airlift.airline.ParseArgumentsUnexpectedException: Found unexpected parameters: [cms, initialize]
+at io.airlift.airline.Cli.validate(Cli.java:194)
+at io.airlift.airline.Cli.parse(Cli.java:132)
+        ...{code}
+ 
+NodetoolResult command cannot recognize its parameters before the upgrade. When they executes on different versions of node before and after the upgrade, they call the same method on the delegate node with different versions. However, before the upgrade, the nodetoolResult command always fails to execute.
+ 
+Here is the configuration property of the delegate nodes for the above two test cases. Both configurations are very similar except for `version` and `generation`:
+{code:java}
+this = {AbstractCluster$Wrapper@15093} ""node1""
+ config = {InstanceConfig@15098} ""...""
+ delegate = {Instance@15099} ""node1""
+ version = {Versions$Version@15100} 
+  version = {Semver@15118} ""5.0-beta1""
+  classpath = {URL[1]@15119} 
+ isShutdown = false
+ broadcastAddress = {InetSocketAddress@15101} ""/127.0.0.1:7012""
+ generation = 0
+ this$0 = {UpgradeableCluster@15102} 
+withNotifications = true
+commandAndArgs = {String[2]@15094} [""cms"", ""initialize""]{code}
+ 
+{code:java}
+this = {AbstractCluster$Wrapper@28321} ""node1""
+ config = {InstanceConfig@28326} ""...""
+ delegate = {Instance@28327} ""node1""
+ version = {Versions$Version@28328} 
+  version = {Semver@28343} ""5.1""
+  classpath = {URL[1]@28344} 
+ isShutdown = false
+ broadcastAddress = {InetSocketAddress@28329} ""/127.0.0.1:7012""
+ generation = 1
+ this$0 = {UpgradeableCluster@28330} 
+withNotifications = true
+commandAndArgs = {String[2]@28322} [""cms"", ""initialize""]{code}
+ 
+And the code in `nodetoolResult` only have some minor difference in `SecurityManager` for version [`5.0-beta1`]([https://github.com/apache/cassandra/blob/87fd1fa88a0c859cc32d9f569ad09ad0b345e465/test/distributed/org/apache/cassandra/distributed/impl/Instance.java#L987]) and [`5.1`]([https://github.com/apache/cassandra/blob/9679206f7443328b8688e35f6f09ce284d4bfe21/test/distributed/org/apache/cassandra/distributed/impl/Instance.java#L1050):]
+
+ 
+{code:java}
+// install security manager to get informed about the exit-code
+System.setSecurityManager(new SecurityManager()
+{
+    public void checkExit(int status)
+    {
+        throw new SystemExitException(status);
+    }
+    public void checkPermission(Permission perm)
+    {
+    }
+    public void checkPermission(Permission perm, Object context)
+    {
+    }
+});
+{code}
+ 
+{code:java}
+SecurityManager before = System.getSecurityManager();
+// install security manager to get informed about the exit-code
+ClusterUtils.preventSystemExit();{code}
+The expected behavior should be that `nodetoolResult` behaves consistently before and after the upgrade.
+ "
+CASSANDRA-19813,timeout on  upgrade_tests/upgrade_through_versions_test.py::TestProtoV3Upgrade_AllVersions_RandomPartitioner_EndsAt_Trunk_HEAD::test_parallel_upgrade," The upgrade_tests/upgrade_through_versions_test.py::TestProtoV3Upgrade_AllVersions_RandomPartitioner_EndsAt_Trunk_HEAD::test_parallel_upgrade  test is taking longer than usual.
+
+CI in 5.0 is timing out the dtest-upgrade-large 59/64 split always now.
+
+Our 5.0-rc testing results are tainted because these time outs always abort the 5.0 pipeline runs.
+
+It looks like that split is taking 16x times as long now… 
+
+This appears to be caused from either/both
+- https://github.com/apache/cassandra/commit/08e1fecf36507397cf3122d77f84aa23150da588
+- https://github.com/apache/cassandra-dtest/commit/2b17c1293056068bb3e94c332d6fb99df6a0b0fa
+
+
+Example of good run.
+ [^test_rolling_upgrade.257.good.log] (ci-cassandra.a.o)
+
+Examples of bad runs.
+ [^test_rolling_upgrade.122.log],  [^test_rolling_upgrade.123-2.log],  [^test_rolling_upgrade.123-1.log],  [^test_rolling_upgrade.134.log]  (internal ci)
+ [^test_rolling_upgrade.261-1.log] ,  [^test_rolling_upgrade.261-2.log]  (ci-cassandra.a.o)
+"
+CASSANDRA-19812,We should throw exception when commitlog 's DiskAccessMode is direct but direct io is not support,"Looking into the code below : 
+{code:java}
+private static DiskAccessMode resolveCommitLogWriteDiskAccessMode(DiskAccessMode providedDiskAccessMode)
+    {
+        boolean compressOrEncrypt = getCommitLogCompression() != null || (getEncryptionContext() != null && getEncryptionContext().isEnabled());
+        boolean directIOSupported = false;
+        try
+        {
+            directIOSupported = FileUtils.getBlockSize(new File(getCommitLogLocation())) > 0;
+        }
+        catch (RuntimeException e)
+        {
+            logger.warn(""Unable to determine block size for commit log directory: {}"", e.getMessage());
+        }
+
+        if (providedDiskAccessMode == DiskAccessMode.auto)
+        {
+            if (compressOrEncrypt)
+                providedDiskAccessMode = DiskAccessMode.legacy;
+            else
+            {
+                providedDiskAccessMode = directIOSupported && conf.disk_optimization_strategy == Config.DiskOptimizationStrategy.ssd ? DiskAccessMode.direct
+                                                                                                                                     : DiskAccessMode.legacy;
+            }
+        }
+
+        if (providedDiskAccessMode == DiskAccessMode.legacy)
+        {
+            providedDiskAccessMode = compressOrEncrypt ? DiskAccessMode.standard : DiskAccessMode.mmap;
+        }
+
+        return providedDiskAccessMode;
+    }
+{code}
+
+We should throw exception when user set the DiskAccessMode to direct for commitlog but the directIOSupported return false after the judgement of ""FileUtils.getBlockSize(new File(getCommitLogLocation())) > 0;"" instead of waiting for the system to start and accepting reads and writes.
+"
+CASSANDRA-19809,Deprecate and ignore use_deterministic_table_id,"With transactional metadata finally in place in 5.x, we have no further need for {{{}use_deterministic_table_id{}}}. I propose we...
+
+ 
+1.) Leave CQL {{WITH id}} intact.
+2.) Deprecate and WARN on {{use_deterministic_table_id}} ** in 5.0.x.
+3.) Ignore and WARN on {{use_deterministic_table_id}} ** in 5.1.
+4.) In some future major release, remove {{use_deterministic_table_id}} from {{Config}}"
+CASSANDRA-19808,Gossiper (micro) optmizations,"I am wondering about optimizations that can be done in the gossiper class, especially targeting performance at larger scales. 
+ # getLiveMembers: Creating a hashmap every time this is called. Aside from creating some trash, its linear in terms of the number of peers.
+ # getMaxEndpointStateVersion: I feel this can be calculated and cached rather than looking for it. It is also linear on the number of peers.
+ # getGossipStatus: Linear in the number of peers, also source of garbage at larger scales.
+
+It seems optmizing these methods can contribute to a cleaner/performant membership protocol. Is there any plans on having these types of optmizations?"
+CASSANDRA-19807,[Analytics] Improve the core bulk reader test system to match actual and expected rows by concatenating the partition keys with the serialized hex string instead of utf-8 string,"The current test system for the bulk reader matches actual and expected rows by building a utf-8 string of the concatenated partition key(s), it would be better to match on the hex string of the serialized bytes to avoid the current custom string builder implementation."
+CASSANDRA-19806,[Analytics] Stream sstable eagerly when bulk writing to allow reclaiming local disk space,"Currently, each bulk write executor only sends sstables after exhausting the input data (of the task). All produced sstables are staged locally, when executor local disk space is limited or the input data size is too large, there is a risk of running out of disk space.
+The patch changes the streaming strategy to stream eagerly and remove the local files sooner."
+CASSANDRA-19804,Flakey test upgrade_tests.upgrade_through_versions_test.TestProtoV3Upgrade_AllVersions_EndsAt_Trunk_HEAD#test_rolling_upgrade,"{code}
+==================================== ERRORS ====================================
+_ ERROR at teardown of TestProtoV3Upgrade_AllVersions_EndsAt_Trunk_HEAD.test_rolling_upgrade _
+Unexpected error found in node logs (see stdout for full details). Errors: [[node3] 'ERROR [InternalResponseStage:3] 2024-07-26 04:35:12,345 MessagingService.java:509 - Cannot send the message (from:/127.0.0.3:7000, type:FETCH_LOG verb:TCM_FETCH_PEER_LOG_REQ) to /127.0.0.1:7000, as messaging service is shutting down', [node3] 'ERROR [InternalResponseStage:4] 2024-07-26 04:35:27,412 MessagingService.java:509 - Cannot send the message (from:/127.0.0.3:7000, type:FETCH_LOG verb:TCM_FETCH_PEER_LOG_REQ) to /127.0.0.1:7000, as messaging service is shutting down']
+{code}"
+CASSANDRA-19803,Flakey test org.apache.cassandra.distributed.test.TransientRangeMovement2Test#testMoveForward,"{code}
+ junit.framework.AssertionFailedError: SHOULD NOT BE ON NODE: 11 -- [(16,30)]: [00, 02, 04, 06, 08, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 42, 44, 46, 48]
+	at org.apache.cassandra.distributed.test.TransientRangeMovementTest.assertAllContained(TransientRangeMovementTest.java:231)
+	at org.apache.cassandra.distributed.test.TransientRangeMovement2Test.testMoveForward(TransientRangeMovement2Test.java:143)
+{code}"
+CASSANDRA-19802,Harry Simulation test halts the JVM when errors are detected which loose all history in CI,"The Harry simulation test has a few issues, but the biggest is it calls System.exit when an error is found… this blocks the JVM from creating a test report and can loose all history needed to reproduce the issue..
+
+1) when the test fails it doesn’t properly show the seed
+2) you can’t rerun the test with the same seed without modifying the code
+3) if uncaught exceptions are found the test still passes (this is masking TCM issues)"
+CASSANDRA-19799,Add .asf.yml and GH to ML connections,Ensure .asf.yml is setup per project practices.
+CASSANDRA-19798,Update Drivers subproject internal docs,"Add the driver to the Drivers subprojects wiki page.
+"
+CASSANDRA-19794,NPE on Directory access during Memtable flush fails ShortPaxosSimulationTest,"Run {{ShortPaxosSimulationTest}} w/ the following arguments on trunk:
+
+{noformat}
+PaxosSimulationRunner.main(new String[] { ""run"", ""-n"", ""3..6"", ""-t"", ""1000"", ""-c"", ""2"", ""--cluster-action-limit"", ""2"", ""-s"", ""30"", ""--seed"", ""0xe0247e19a75e3bba"" });
+{noformat}
+
+You should see a failure, starting with...
+
+{noformat}
+[junit-timeout] WARN  [OptionalTasks:1] node5 2024-07-22 15:46:00,210 LegacyStateListener.java:158 - Token -6148914691236517205 changing ownership from /127.0.0.1:7012 to /127.0.0.6:7012
+[junit-timeout] WARN  [OptionalTasks:1] node6 2024-07-22 15:46:00,259 SystemKeyspace.java:1287 - Using stored Gossip Generation 1577894856 as it is greater than current system time 1577894855.  See CASSANDRA-3654 if you experience problems
+[junit-timeout] WARN  [OptionalTasks:1] node6 2024-07-22 15:46:00,277 LegacyStateListener.java:158 - Token -6148914691236517205 changing ownership from /127.0.0.1:7012 to /127.0.0.6:7012
+[junit-timeout] ERROR [isolatedExecutor:3] node6 2024-07-22 15:46:00,469 ReconfigureCMS.java:184 - Could not finish adding the node to the Cluster Metadata Service
+[junit-timeout] java.lang.IllegalStateException: Can not commit transformation: ""SERVER_ERROR""(class java.lang.NullPointerException).
+[junit-timeout] 	at org.apache.cassandra.tcm.ClusterMetadataService.lambda$commit$6(ClusterMetadataService.java:491)
+[junit-timeout] 	at org.apache.cassandra.tcm.ClusterMetadataService.commit(ClusterMetadataService.java:535)
+[junit-timeout] 	at org.apache.cassandra.tcm.ClusterMetadataService.commit(ClusterMetadataService.java:488)
+[junit-timeout] 	at org.apache.cassandra.tcm.sequences.ReconfigureCMS.executeNext(ReconfigureCMS.java:179)
+[junit-timeout] 	at org.apache.cassandra.tcm.sequences.InProgressSequences.resume(InProgressSequences.java:200)
+[junit-timeout] 	at org.apache.cassandra.tcm.sequences.InProgressSequences.finishInProgressSequences(InProgressSequences.java:72)
+[junit-timeout] 	at org.apache.cassandra.tcm.ClusterMetadataService.reconfigureCMS(ClusterMetadataService.java:372)
+[junit-timeout] 	at org.apache.cassandra.tcm.ClusterMetadataService.ensureCMSPlacement(ClusterMetadataService.java:379)
+[junit-timeout] 	at org.apache.cassandra.tcm.sequences.BootstrapAndReplace.executeNext(BootstrapAndReplace.java:274)
+[junit-timeout] 	at org.apache.cassandra.simulator.cluster.OnClusterReplace$ExecuteNextStep.lambda$new$f5e64c00$1(OnClusterReplace.java:162)
+[junit-timeout] 	at org.apache.cassandra.distributed.api.IInvokableInstance.unsafeRunOnThisThread(IInvokableInstance.java:85)
+[junit-timeout] 	at org.apache.cassandra.simulator.systems.SimulatedActionTask.lambda$asSafeRunnable$0(SimulatedActionTask.java:83)
+[junit-timeout] 	at org.apache.cassandra.simulator.systems.SimulatedActionTask$1.run(SimulatedActionTask.java:93)
+[junit-timeout] 	at org.apache.cassandra.simulator.systems.InterceptingExecutor$InterceptingPooledExecutor$WaitingThread.lambda$new$1(InterceptingExecutor.java:318)
+[junit-timeout] 	at io.netty.util.concurrent.FastThreadLocalRunnable.run(FastThreadLocalRunnable.java:30)
+[junit-timeout] 	at java.base/java.lang.Thread.run(Thread.java:829)
+{noformat}
+
+...and underneath that...
+
+{noformat}
+[junit-timeout] Thread[ScheduledTasks:1,5,node3]
+[junit-timeout] java.lang.NullPointerException
+[junit-timeout] 	at org.apache.cassandra.utils.btree.AbstractBTreeMap.get(AbstractBTreeMap.java:92)
+[junit-timeout] 	at org.apache.cassandra.tcm.membership.Directory.endpoint(Directory.java:312)
+[junit-timeout] 	at org.apache.cassandra.tcm.transformations.cms.AdvanceCMSReconfiguration.executeRemove(AdvanceCMSReconfiguration.java:242)
+[junit-timeout] 	at org.apache.cassandra.tcm.transformations.cms.AdvanceCMSReconfiguration.execute(AdvanceCMSReconfiguration.java:123)
+[junit-timeout] 	at org.apache.cassandra.tcm.sequences.ReconfigureCMS.applyTo(ReconfigureCMS.java:149)
+[junit-timeout] 	at org.apache.cassandra.tcm.ClusterMetadata.writePlacementAllSettled(ClusterMetadata.java:275)
+[junit-timeout] 	at org.apache.cassandra.db.DiskBoundaryManager.getLocalRanges(DiskBoundaryManager.java:158)
+[junit-timeout] 	at org.apache.cassandra.db.DiskBoundaryManager.getDiskBoundaryValue(DiskBoundaryManager.java:121)
+[junit-timeout] 	at org.apache.cassandra.db.DiskBoundaryManager.getDiskBoundaries(DiskBoundaryManager.java:65)
+[junit-timeout] 	at org.apache.cassandra.db.ColumnFamilyStore.getDiskBoundaries(ColumnFamilyStore.java:3676)
+[junit-timeout] 	at org.apache.cassandra.db.compaction.CompactionStrategyManager.maybeReloadDiskBoundaries(CompactionStrategyManager.java:587)
+[junit-timeout] 	at org.apache.cassandra.db.compaction.CompactionStrategyManager.handleNotification(CompactionStrategyManager.java:899)
+[junit-timeout] 	at org.apache.cassandra.db.lifecycle.Tracker.notify(Tracker.java:558)
+[junit-timeout] 	at org.apache.cassandra.db.lifecycle.Tracker.notifySwitched(Tracker.java:547)
+[junit-timeout] 	at org.apache.cassandra.db.lifecycle.Tracker.switchMemtable(Tracker.java:390)
+[junit-timeout] 	at org.apache.cassandra.db.ColumnFamilyStore$Flush.<init>(ColumnFamilyStore.java:1248)
+[junit-timeout] 	at org.apache.cassandra.db.ColumnFamilyStore.switchMemtable(ColumnFamilyStore.java:1074)
+[junit-timeout] 	at org.apache.cassandra.db.ColumnFamilyStore.switchMemtableIfCurrent(ColumnFamilyStore.java:1055)
+[junit-timeout] 	at org.apache.cassandra.db.ColumnFamilyStore.signalFlushRequired(ColumnFamilyStore.java:1482)
+[junit-timeout] 	at org.apache.cassandra.db.memtable.AbstractAllocatorMemtable.flushIfPeriodExpired(AbstractAllocatorMemtable.java:240)
+[junit-timeout] 	at org.apache.cassandra.db.memtable.AbstractAllocatorMemtable$1.runMayThrow(AbstractAllocatorMemtable.java:221)
+[junit-timeout] 	at org.apache.cassandra.utils.WrappedRunnable.run(WrappedRunnable.java:26)
+[junit-timeout] 	at org.apache.cassandra.simulator.systems.SimulatedExecution$1.call(SimulatedExecution.java:212)
+[junit-timeout] 	at org.apache.cassandra.concurrent.SyncFutureTask.run(SyncFutureTask.java:68)
+[junit-timeout] 	at org.apache.cassandra.simulator.systems.InterceptingExecutor$AbstractSingleThreadedExecutorPlus.lambda$new$0(InterceptingExecutor.java:585)
+[junit-timeout] 	at io.netty.util.concurrent.FastThreadLocalRunnable.run(FastThreadLocalRunnable.java:30)
+[junit-timeout] 	at java.base/java.lang.Thread.run(Thread.java:829)
+{noformat}
+
+Reverting the changes from CASSANDRA-19705 allows the test to complete successfully, which makes sense, as {{ensureCMSPlacement()}} shows up in the trace above."
+CASSANDRA-19793,[Analytics] Split the Cassandra type logic out from CassandraBridge so it can be utilized without the Spark dependency.,The CassandraBridge is a monolithic class that bridges to Cassandra but for other use cases it is beneficial to access the Cassandra types independently to deserialize Cassandra data. By splitting out the Cassandra types into a separate object we can utilize Cassandra types for deserializing Cassandra raw ByteBuffers decoupled from the Spark dependency.
+CASSANDRA-19792,Allow configuring log format for Audit Logs,"Enhance the configuration for audit loggers to take two new parameters. One is for defining the key-value separator character, and the second is for the field separator character.
+
+The existing behavior will be preserved. However an operator can configure parameters to customize the separators. For example:
+
+
+{code:java}
+audit_logging_options:
+  enabled: false
+  logger:
+    - class_name: FileAuditLogger
+      parameters:
+        - key_value_separator: ""=""
+          field_separator: "" ""
+{code}"
+CASSANDRA-19791,"[Analytics] Remove other uses of Apache Commons Lang for hashcodes, equality and random string generation","Apache Commons Lang is pulled in transitively by Spark but the common module does not depend on it. This change removes other uses of Apache Commons Lang for hashcode, equality checks and random string generation so more code can be moved into common module."
+CASSANDRA-19790,Add an ability to reconstruct arbitrary epoch state from the log to TCM,"Current Accord functionality requires TCM to be able to provide cluster metadata for an arbitrary epoch. Unfortunately, epochs are not always available locally especially on bootstrapping non-CMS nodes. For this, we need to reconstruct from the log."
+CASSANDRA-19788,Simplify and deduplicate Harry ModelChecker,
+CASSANDRA-19787,Remove centos7 (and use vault mirror for ant-junit rpm download),"centos7 is EOL, and its rpm repository is gone.
+
+Use almalinux for the noboolean builds, and use the redhat vault repository to get the ant-junit rpm."
+CASSANDRA-19782,Host replacements no longer fully populate system.peers table,"When running harry after a host replacement was done a failure happened due to peers having the new node, but not the tokens for it (leading to a NPE in harry).  I took the test org.apache.cassandra.distributed.test.hostreplacement.HostReplacementTest#replaceDownedHost and made one small change; log peers after the host replacement
+
+
+4.1:
+{code}
+INFO  [main] <main> 2024-07-18 09:36:48,211 HostReplacementTest.java:107 - Peers table from node1:
+[/127.0.0.3, datacenter0, 00000000-0000-4000-8000-000000000003, null, rack0, 4.1.5-SNAPSHOT, /127.0.0.3, 94a14fb6-2cd9-3d1d-af84-a30e257aa7b8, [9223372036854775805]]
+{code}
+
+Trunk:
+{code}
+INFO  [main] <main> 2024-07-18 09:38:59,568 HostReplacementTest.java:109 - Peers table from node1:
+[/127.0.0.3, null, null, null, null, 5.1.0-SNAPSHOT, /127.0.0.3, 00000000-0000-0000-0000-00000000000a, null]
+{code}
+
+Several fields are missing"
+CASSANDRA-19780,Illegal access warning logs visible on bin/tools invocations,"There is discrepancy between what opens we have for tools under Java 17 and what we open under Java 11.
+
+For example this does not emit any warnings when we are on Java 17:
+{code:java}
+./tools/bin/auditlogviewer /tmp/diagnostics -f {code}
+But it does emit these warnings when we are on Java 11
+{code:java}
+WARNING: An illegal reflective access operation has occurred
+WARNING: Illegal reflective access using Lookup on net.openhft.chronicle.core.Jvm (file:/tmp/apache-test/apache-cassandra-5.0-rc1-SNAPSHOT/lib/chronicle-core-2.23.36.jar) to class java.lang.reflect.AccessibleObject
+WARNING: Please consider reporting this to the maintainers of net.openhft.chronicle.core.Jvm
+WARNING: Use --illegal-access=warn to enable warnings of further illegal reflective access operations
+WARNING: All illegal access operations will be denied in a future release{code}
+When I compared what that tool runs with on Java 17 and Java 11, I see this:
+
+ 
+
+Java 17
+{code:java}
+--add-exports java.base/jdk.internal.misc=ALL-UNNAMED 
+--add-exports java.management.rmi/com.sun.jmx.remote.internal.rmi=ALL-UNNAMED 
+--add-exports java.rmi/sun.rmi.registry=ALL-UNNAMED 
+--add-exports java.rmi/sun.rmi.server=ALL-UNNAMED 
+--add-exports java.sql/java.sql=ALL-UNNAMED 
+--add-exports java.base/java.lang.ref=ALL-UNNAMED 
+--add-exports jdk.unsupported/sun.misc=ALL-UNNAMED 
+--add-opens java.base/java.lang.module=ALL-UNNAMED 
+--add-opens java.base/jdk.internal.loader=ALL-UNNAMED 
+--add-opens java.base/jdk.internal.ref=ALL-UNNAMED 
+--add-opens java.base/jdk.internal.reflect=ALL-UNNAMED 
+--add-opens java.base/jdk.internal.math=ALL-UNNAMED 
+--add-opens java.base/jdk.internal.module=ALL-UNNAMED 
+--add-opens java.base/jdk.internal.util.jar=ALL-UNNAMED 
+--add-opens jdk.management/com.sun.management.internal=ALL-UNNAMED 
+--add-opens java.base/sun.nio.ch=ALL-UNNAMED 
+--add-opens java.base/java.io=ALL-UNNAMED 
+--add-opens java.base/java.lang=ALL-UNNAMED 
+--add-opens java.base/java.lang.reflect=ALL-UNNAMED 
+--add-opens java.base/java.util=ALL-UNNAMED 
+--add-opens java.base/java.nio=ALL-UNNAMED 
+--add-exports jdk.attach/sun.tools.attach=ALL-UNNAMED 
+--add-exports jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED 
+--add-opens jdk.compiler/com.sun.tools.javac=ALL-UNNAMED {code}
+For Java 11
+{code:java}
+--add-exports java.base/jdk.internal.misc=ALL-UNNAMED 
+--add-exports java.base/jdk.internal.ref=ALL-UNNAMED 
+--add-exports java.base/sun.nio.ch=ALL-UNNAMED 
+--add-exports java.management.rmi/com.sun.jmx.remote.internal.rmi=ALL-UNNAMED 
+--add-exports java.rmi/sun.rmi.registry=ALL-UNNAMED 
+--add-exports java.rmi/sun.rmi.server=ALL-UNNAMED 
+--add-exports java.sql/java.sql=ALL-UNNAMED 
+--add-opens java.base/java.lang.module=ALL-UNNAMED 
+--add-opens java.base/jdk.internal.loader=ALL-UNNAMED 
+--add-opens java.base/jdk.internal.ref=ALL-UNNAMED 
+--add-opens java.base/jdk.internal.reflect=ALL-UNNAMED 
+--add-opens java.base/jdk.internal.math=ALL-UNNAMED 
+--add-opens java.base/jdk.internal.module=ALL-UNNAMED 
+--add-opens java.base/jdk.internal.util.jar=ALL-UNNAMED 
+--add-opens jdk.management/com.sun.management.internal=ALL-UNNAMED {code}
+The difference is that we are not exporting this for Java 11
+{code:java}
+--add-opens java.base/sun.nio.ch=ALL-UNNAMED 
+--add-opens java.base/java.io=ALL-UNNAMED 
+--add-opens java.base/java.lang=ALL-UNNAMED 
+--add-opens java.base/java.lang.reflect=ALL-UNNAMED 
+--add-opens java.base/java.util=ALL-UNNAMED 
+--add-opens java.base/java.nio=ALL-UNNAMED 
+--add-opens java.base/java.lang.reflect=ALL-UNNAMED {code}
+For Java 17, we explicitly add only these which are not applicable for 11 (check the end of tools/bin/cassandra.in.sh)
+{code:java}
+--add-exports jdk.attach/sun.tools.attach=ALL-UNNAMED
+--add-exports jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED
+--add-opens jdk.compiler/com.sun.tools.javac=ALL-UNNAMED  {code}
+ 
+
+So, what I propose is that we add the missing opens to cassandra.in.sh for Java 11.
+
+Even better, I would add this to conf/jvm11-clients.options"
+CASSANDRA-19779,direct IO support is always evaluated to false upon the very first start of a node,"When I extract the distribution tarball and I want to use tools in tools/bin, there is this warn log visible every time for tools when they are started (does not happen on ""help"" command, obviously)
+{code:java}
+WARN  14:25:11,835 Unable to determine block size for commit log directory: null {code}
+This is because we introduced this (1) in CASSANDRA-18464
+
+What that does is that it will go and try to create a temporary file in commit log directory to get ""block size"" for a ""file store"" that file is in.
+
+The problem with that is that when we just extract a tarball and run the tools - Cassandra was never started - then such commit log directory does not exist yet, so it tries to create a temporary file in a non-existing directory, which fails, hence the log message.
+
+The fix is to check if commitlog dir exists and return / skip the resolution of block size if it does not.
+
+Another approach might be to check if this is executed in the context of a tool and skip it from resolution altogether. The problem with this is that not all tools we have in bin/log call DatabaseDescriptor.
+toolInitialization() so we might combine these two.
+(1) [https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/config/DatabaseDescriptor.java#L1455-L1462]"
+CASSANDRA-19778,[Analytics] Split out BufferingInputStream stats into separate interface,The class level generics in the org.apache.cassandra.spark.stats.Stats interface are clashing with other generic parameters in the method names. This can be improved by splitting out the stats methods used by the BufferingInputStream into a separate stats interface that is used only by the BufferingInputStream so that class level generics are not required for the Stats interface.
+CASSANDRA-19774,[Analytics] Bump Cassandra Sidecar version to fix build issue,"Cassandra analytics build is failing due to sidecar build failure. It is fixed in the latest Cassandra Sidecar. This patch bumps the sidecar version in analytics.
+"
+CASSANDRA-19772,[Analytics] Deprecate option SIDECAR_INSTANCES and replace with SIDECAR_CONTACT_POINTS,"This patch introduces a new option SIDECAR_CONTACT_POINTS for both bulk writer and reader. The option name better describes the purpose, which is to specify the initial contact points to discover the cluster topology. The existing option SIDECAR_INSTANCES are used for the same purpose and it is not deprecated.
+In addition, it allows including the port value in the addresses when defining SIDECAR_CONTACT_POINTS"
+CASSANDRA-19768,nodetool assassinate of a CMS voting member should be allowed and should remove it from the CMS group,"nodetool assassinate is a dangerous command but is needed when the node to be removed really can’t be accessed anymore (such as host failures).  But when the node to be removed is a member of CMS, we block this action with the following error
+
+{code}
+Can not commit transformation: ""INVALID""(Rejecting this plan as the node NodeId{id=3} is still a part of CMS.).
+{code}
+
+If the node in question is not up, and we call nodetool assassinate, we should then try to remove that node from the CMS membership group
+
+Steps to repo
+
+* Start 4 node cluster
+* nodetool cms reconfigure 3
+* targetNode = <one of the nodes in CMS>
+* stop targetNode
+* nodetool assassinate targetNode"
+CASSANDRA-19767,Fix storage_compatibility_mode and startup_checks documentation,"The documentation for storage_compatibility_mode ([https://cassandra.apache.org/doc/latest/cassandra/managing/configuration/cass_yaml_file.html#storage_compatibility_mode]) is very difficult to read. The below highlighted text seems incorrect.
+
+!image-2024-07-12-09-38-16-284.png|width=505,height=487!
+
+ 
+
+It appears that the entry for the YAML option above it is causing entries to get clobbered together (startup_checks)
+
+ 
+
+This is actually a very useful and important feature for people upgrading to Cassandra 5 to understand how to use properly - It would be good for it to be easier to read, we should be encouraging use of the safest possible upgrade path, which from my understanding would be:
+
+{{CASSANDRA_4 -> UPGRADING -> NONE}}
+
+ 
+
+ 
+
+Update - seems like the startup_checks docs is also missing in the 4.1 pages, I'll fix that as well."
+CASSANDRA-19762,Implement dictionary lookup for CassandraPasswordValidator,
+CASSANDRA-19761,"When JVM dtest is shutting down, if a new epoch is being committed the node is unable to shut down","The following was seen in the accord branch, but the problem is found in trunk as well.
+
+{code}
+node1_isolatedExecutor:8:
+	java.base@11.0.15/jdk.internal.misc.Unsafe.park(Native Method)
+	java.base@11.0.15/java.util.concurrent.locks.LockSupport.parkNanos(LockSupport.java:234)
+	org.apache.cassandra.simulator.systems.InterceptorOfSystemMethods$None.parkNanos(InterceptorOfSystemMethods.java:373)
+	org.apache.cassandra.simulator.systems.InterceptorOfSystemMethods$Global.parkNanos(InterceptorOfSystemMethods.java:166)
+	java.base@11.0.15/java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject.awaitNanos(AbstractQueuedSynchronizer.java:2123)
+	java.base@11.0.15/java.util.concurrent.ThreadPoolExecutor.awaitTermination(ThreadPoolExecutor.java:1454)
+	org.apache.cassandra.utils.ExecutorUtils.awaitTerminationUntil(ExecutorUtils.java:110)
+	org.apache.cassandra.utils.ExecutorUtils.awaitTermination(ExecutorUtils.java:100)
+	org.apache.cassandra.concurrent.Stage.shutdownAndWait(Stage.java:195)
+	org.apache.cassandra.distributed.impl.Instance.lambda$shutdown$44(Instance.java:975)
+{code}
+
+{code}
+node1_MiscStage:1:
+	java.base@11.0.15/jdk.internal.misc.Unsafe.park(Native Method)
+	java.base@11.0.15/java.util.concurrent.locks.LockSupport.park(LockSupport.java:323)
+	org.apache.cassandra.utils.concurrent.WaitQueue$Standard$AbstractSignal.await(WaitQueue.java:290)
+	org.apache.cassandra.utils.concurrent.WaitQueue$Standard$AbstractSignal.await(WaitQueue.java:283)
+	org.apache.cassandra.utils.concurrent.Awaitable$AsyncAwaitable.await(Awaitable.java:306)
+	org.apache.cassandra.utils.concurrent.Awaitable$AsyncAwaitable.await(Awaitable.java:338)
+	org.apache.cassandra.utils.concurrent.Awaitable$Defaults.awaitUninterruptibly(Awaitable.java:186)
+	org.apache.cassandra.utils.concurrent.Awaitable$AbstractAwaitable.awaitUninterruptibly(Awaitable.java:259)
+	org.apache.cassandra.tcm.log.LocalLog$Async.runOnce(LocalLog.java:710)
+	org.apache.cassandra.tcm.log.LocalLog.runOnce(LocalLog.java:404)
+	org.apache.cassandra.tcm.log.LocalLog.waitForHighestConsecutive(LocalLog.java:346)
+	org.apache.cassandra.tcm.PaxosBackedProcessor.fetchLogAndWait(PaxosBackedProcessor.java:163)
+	org.apache.cassandra.tcm.AbstractLocalProcessor.commit(AbstractLocalProcessor.java:109)
+	org.apache.cassandra.distributed.test.log.TestProcessor.commit(TestProcessor.java:61)
+	org.apache.cassandra.tcm.ClusterMetadataService$SwitchableProcessor.commit(ClusterMetadataService.java:841)
+	org.apache.cassandra.tcm.Processor.commit(Processor.java:45)
+	org.apache.cassandra.tcm.ClusterMetadataService.commit(ClusterMetadataService.java:516)
+	org.apache.cassandra.service.accord.AccordFastPathCoordinator$Impl.lambda$updateFastPath$2(AccordFastPathCoordinator.java:208)
+	org.apache.cassandra.service.accord.AccordFastPathCoordinator$Impl$$Lambda$11211/0x0000000802441840.run(Unknown Source)
+{code}
+
+Accord is trying to commit a new epoch, but TCM uses “awaitUninterruptibly” which ignores the thread interrupt done while the cluster is shutting down.  When this is happening the instance is unable to make progress so loops endlessly, causing the test to fail to close."
+CASSANDRA-19759,"CEP-15 (Accord): When starting a transaction in a table where Accord is not enabled, should fail fast rather than fail with lack of ranges","Reported in Slack: https://the-asf.slack.com/archives/C0459N9R5C6/p1712831271287869
+
+The “accord_demo.txt” has the following
+
+{code}
+ccm create accord-cql-poc -n 3
+ccm start
+
+bin/cqlsh -e ""create keyspace ks with replication={'class':'SimpleStrategy', 'replication_factor':3};""
+bin/cqlsh -e ""create table ks.tbl1 (k int primary key, v int);""
+bin/cqlsh -e ""create table ks.tbl2 (k int primary key, v int);""
+
+bin/nodetool -h 0000:0000:0000:0000:0000:ffff:7f00:0001 -p 7100 createepochunsafe
+bin/nodetool -h 0000:0000:0000:0000:0000:ffff:7f00:0001 -p 7200 createepochunsafe
+bin/nodetool -h 0000:0000:0000:0000:0000:ffff:7f00:0001 -p 7300 createepochunsafe
+
+BEGIN TRANSACTION
+  LET row1 = (SELECT * FROM ks.tbl1 WHERE k = 1);
+  SELECT row1.v;
+  IF row1 IS NULL THEN
+    INSERT INTO ks.tbl1 (k, v) VALUES (1, 2);
+  END IF
+COMMIT TRANSACTION;
+{code}
+
+If you run that it fails in an unclear way
+
+{code}
+cqlsh> BEGIN TRANSACTION
+   ...   LET row1 = (SELECT * FROM ks.tbl1 WHERE k = 1);
+   ...   SELECT row1.v;
+   ...   IF row1 IS NULL THEN
+   ...     INSERT INTO ks.tbl1 (k, v) VALUES (1, 2);
+   ...   END IF
+   ... COMMIT TRANSACTION;
+NoHostAvailable: ('Unable to complete the operation against any hosts', {<Host: 127.0.0.1:9042 datacenter1>: <Error from server: code=0000 [Server error] message=""java.lang.IllegalStateException: Unable to select a HomeKey as the topology does not have any ranges for epoch 17"">})
+{code}
+
+The issue is that the table was not marked as an Accord table; aka missing 
+
+{code}
+WITH transactional_mode='full'
+{code}
+
+The demo should be updated to show this, but the error message should also be improved.  We validate that the table exists but now that the metadata is required we should also enforce this in CQL validation"
+CASSANDRA-19758,Accord: CommandsForKey should self-prune,"CommandsForKey should periodically self-prune, so as to continue functioning well in-between garbage collections. This is a bit complicated, as once we prune we are left with potentially incomplete information, and have to sometimes load per-command information from disk. But the payoff is ensuring CommandsForKey objects - which drive the majority of the state machine - are kept to a reasonable size.
+"
+CASSANDRA-19757, Accord Journal / Determinism: Load Command states from the log,"  * Persist intermediate Command inthe journal
+  * Simplify AccordJournal by removing Framing
+  * Save command outcomes to the log
+  * Reconstruct latest command state from the log entries
+  * Replace `SerializerSupport#reconstruct` with log reconstruction"
+CASSANDRA-19756,Accord Journal / Determinism: Store intermediate Command states in the log,"Write side of the replay determinism: persist intermediate Command in the journal
+
+      * Simplifies AccordJournal by removing Framing
+      * Saves command outcomes to the log
+      * Reconstructs latest command state from the log entries"
+CASSANDRA-19755,Coordinator read latency metrics are inflated for some queries,"When a partition read is decomposed on the coordinator into multiple single partition read queries, the latency metric captured in StorageProxy can be artificially increased.
+This primarily affects reads where paging and aggregates are used or where an IN clause selects multiple partition keys."
+CASSANDRA-19753,Not getting responses with concurrent stream IDs in native protocol v5,"This is not gonna be an easy bug to report or to give a great set of repro steps for, so apologies in advance. I’m one of the authors and the maintainer of [Xandra|https://github.com/whatyouhide/xandra], the Cassandra client for Elixir.
+
+We noticed an issue with request timeouts in a new version of our client. Just for reference, the issue is [this one|https://github.com/whatyouhide/xandra/issues/356].
+
+After some debugging, we figured out that the issue was limited to *native protocol v5*. With native protocol v5, the issue shows up in C* 4.1 and 5.0. With native protocol v4, those versions (4.1 and 5.0) both work fine. I'm running C* in a Docker container, but I've had folks reproduce this with all sorts of C* setups.
+
+h2. The Issue
+
+The new version of our client in question uses concurrent requests. We assign each request a sequential stream ID ({{1}}, {{2}}, ...). We behave in a compliant way with [section 2.4.1.3. of the native protocol v5 spec|https://github.com/apache/cassandra/blob/e7cf38b5de6f804ce121e7a676576135db0c4bb1/doc/native_protocol_v5.spec#L316C1-L316C9]—to the best of my knowledge.
+
+Now, it seems like C* does not respond do all requests this way. We have a [simple test|https://github.com/whatyouhide/xandra/pull/368] in our repo that reproduces this. It just issues two requests in parallel (with stream IDs {{1}} and {{2}}) and then keeps issuing requests as soon as there are responses. Almost 100% of the times, we don't get the response on at least one stream. I've also attached some debug logs that show this in case it can be helpful (from the client perspective). The {{<<56, 0, 2, 67, 161, ...>>}} syntax is Erlang's syntax for bytestrings, where each number is the decimal value for a single byte. You can see in the logs that we never get the response frame on stream ID 1. Sometimes it's stream ID 2, or 3, or whatever.
+
+I’m pretty short on what to do next on our end. I’ve tried shuffling around the socket buffer size as well (from {{10}} bytes to {{1000000}} bytes) to get the packets to split up in all sorts of places, but everything works as expected _except_ for the requests that are not coming out of C*.
+
+Any other help is appreciated here, but I've started to suspect this might be something with C*. It could totally not be, but I figured it was worth to post out here.
+
+Thank you all in advance folks! 💟"
+CASSANDRA-19752,Debian packaging fails after openjdk-8* and java8* removed from bullseye,"No candidates for {{`openjdk-8-jdk | java8-jdk`}}
+
+Failure occurs at the {{mk-build-deps}} step…
+{noformat}
+Broken cassandra-build-deps:amd64 Depends on openjdk-8-jdk:amd64 < none @un H >
+     Removing cassandra-build-deps:amd64 because I can't find openjdk-8-jdk:amd64
+Broken cassandra-build-deps:amd64 Depends on java8-jdk:amd64 < none @un H >
+     Removing cassandra-build-deps:amd64 because I can't find java8-jdk:amd64
+     Or group remove for cassandra-build-deps:amd64
+…
+mk-build-deps: Unable to install cassandra-build-deps at /usr/bin/mk-build-deps line 457.
+mk-build-deps: Unable to install all build-dep packages
+{noformat}
+ref: https://ci-cassandra.apache.org/job/Cassandra-3.0-artifacts/jdk=jdk_1.8_latest,label=cassandra/428/console "
+CASSANDRA-19751,IllegalStateException when query on table having static columns during the Cassandra cluster upgrade from 3.11.4 to 4.0.11,"We are upgrading Cassandra cluster from 3.11.4 to 4.0.11. This cluster has SSL enabled.
+While performing upgrade on 1st DC, we observed below WARN/ERROR messages on C* 3 and C* 4 nodes.
+
++C*3 nodes:+
+
+
+{noformat}
+WARN  [ReadStage-1] 2024-06-11 08:04:09,088 AbstractLocalAwareExecutorService.java:167 - Uncaught exception on thread Thread[ReadStage-1,5,main]: {}
+java.lang.IllegalStateException: [last_metadata_updt_ts, price_metadata] is not a subset of [price_metadata]
+
+WARN  [ReadStage-1] 2024-06-19 05:10:31,226 AbstractLocalAwareExecutorService.java:167 - Uncaught exception on thread Thread[ReadStage-1,5,main]: {}
+java.lang.IllegalStateException: [default_price_json, last_metadata_updt_ts, price_metadata] is not a subset of [price_metadata]
+{noformat}
+
+
++C*4 nodes:+
+
+{noformat}
+ERROR [ReadStage-1] 2024-06-19 05:48:47,388 AbstractLocalAwareExecutorService.java:169 - Uncaught exception on thread Thread[ReadStage-1,5,main]
+java.lang.IllegalStateException: [last_metadata_updt_ts, price_metadata] is not a subset of [price_metadata]
+{noformat}
+
+
+Table definition for which above columns are associated is as below:
+
+
+{noformat}
+CREATE TABLE omni_price_ks_v2.location_price_mstr (
+    tcin text,
+    location_id bigint,
+    price_change_id text,
+    default_price_json text static,
+    end_ts bigint,
+    last_metadata_updt_ts bigint static,
+    last_update_ts bigint,
+    price_json text,
+    price_metadata text static,
+    price_type text,
+    start_ts bigint,
+    status text,
+    version text,
+    PRIMARY KEY (tcin, location_id, price_change_id)
+) WITH CLUSTERING ORDER BY (location_id ASC, price_change_id ASC)
+    AND bloom_filter_fp_chance = 0.1
+    AND caching = {'keys': 'ALL', 'rows_per_partition': '100'}
+    AND comment = ''
+    AND compaction = {'class': 'org.apache.cassandra.db.compaction.LeveledCompactionStrategy'}
+    AND compression = {'chunk_length_in_kb': '64', 'class': 'org.apache.cassandra.io.compress.LZ4Compressor'}
+    AND crc_check_chance = 1.0
+    AND dclocal_read_repair_chance = 0.1
+    AND default_time_to_live = 0
+    AND gc_grace_seconds = 864000
+    AND max_index_interval = 2048
+    AND memtable_flush_period_in_ms = 0
+    AND min_index_interval = 128
+    AND read_repair_chance = 0.0
+    AND speculative_retry = '99PERCENTILE';
+{noformat}
+
+App team also observed below error in their application logs when try to read from this table.
+
+{noformat}
+{ ""code"": ""ERR_GETPRICE_0034"", ""message"": ""Cassandra failure during read query at consistency LOCAL_QUORUM (2 responses were required but only 1 replica responded, 1 failed)"" }
+{noformat}
+
+Because of this error, the application is getting impacted during the upgrade.
+Once the upgrade on all DCs is completed, this error stops.
+
+I found below bug which matches our case.
+https://issues.apache.org/jira/browse/CASSANDRA-17601
+
+It seems like we are hitting some bug and hence raising this Jira.
+
+Can you please have a look if this is still a bug and what would be the fix?
+
+Let me know if you need any more details.
+"
+CASSANDRA-19749,ALTER USER | ROLE IF EXISTS creates a user / role if it does not exist,"Let's have:
+
+{code}
+authenticator:
+  class_name : org.apache.cassandra.auth.PasswordAuthenticator
+authorizer: CassandraAuthorizer
+role_manager: CassandraRoleManager
+{code}
+
+and do this:
+
+{code}
+cassandra@cqlsh> select * from system_auth.roles;
+
+ role      | can_login | is_superuser | member_of | salted_hash
+-----------+-----------+--------------+-----------+--------------------------------------------------------------
+ cassandra |      True |         True |      null | $2a$10$sFCKeluid5MlW/Z0CU1ygO1U5qpLW4Rgivmu8rZNmNNQ8WeC2y92S
+
+{code}
+
+Then 
+
+{code}
+cassandra@cqlsh> ALTER USER IF EXISTS this_does_not_exist SUPERUSER ;
+cassandra@cqlsh> select * from system_auth.roles where role = 'this_does_not_exist';
+
+ role                | can_login | is_superuser | member_of | salted_hash
+---------------------+-----------+--------------+-----------+-------------
+ this_does_not_exist |      null |         True |      null |        null
+
+{code}
+
+It seems to be same behaviour for ALTER ROLE too.
+
+{code}
+cassandra@cqlsh> ALTER ROLE IF EXISTS this_role_is_not_there WITH SUPERUSER = true ;
+cassandra@cqlsh> select * from system_auth.roles where role = 'this_role_is_not_there';
+
+ role                   | can_login | is_superuser | member_of | salted_hash
+------------------------+-----------+--------------+-----------+-------------
+ this_role_is_not_there |      null |         True |      null |        null
+
+{code}"
+CASSANDRA-19748,[Analytics] Refactor Analytics to move standalone code into common module with minimal dependencies,"The Analytics codebase is heavily tied to Spark. In an effort to re-use code across projects (like CDC) we should move standalone Pojos and util classes into an cassandra-analytics-common module that exists standalone without dependencies to Cassandra or Spark and with minimal standard dependencies (Kryo, Guava, Jackson, Apache Commons Lang etc)."
+CASSANDRA-19747,Invalid schema.cql created by snapshot after dropping more than one field,"After dropping at least 2 fields the schema.cql produced by _nodetool snapshot_ is invalid (it is missing a comma)
+{code:sql}
+CREATE TABLE IF NOT EXISTS test.testtable (
+    field1 text PRIMARY KEY,
+    field2 text
+    field3 text
+) WITH ID ...{code}
+expected outcome
+{code:sql}
+CREATE TABLE IF NOT EXISTS test.testtable (
+    field1 text PRIMARY KEY,
+    field2 text,
+    field3 text
+) WITH ID ...{code}
+reproducing the isue is simple by running the following commands
+{code:sh}
+docker run -d --name cassandra cassandra:4.1.5
+
+echo ""Wait for the container to start""
+until docker exec -ti cassandra nodetool status | grep UN;do sleep 1;done;sleep 10
+
+echo ""Create keyspace and table for test""
+docker exec -ti cassandra cqlsh -e ""CREATE KEYSPACE IF NOT EXISTS test WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}; CREATE TABLE IF NOT EXISTS test.testtable (field1 text PRIMARY KEY,field2 text,field3 text);""
+
+echo ""Drop 2 fields""
+docker exec -ti cassandra cqlsh -e ""ALTER TABLE test.testtable DROP (field2, field3);""
+
+echo ""Create snapshot and view schema.cql""
+docker exec -ti cassandra /opt/cassandra/bin/nodetool snapshot -t my_snapshot
+docker exec -ti cassandra find /var/lib/cassandra/data -name schema.cql  -exec cat {} +   {code}
+the full output of the sql generated by the reproduce is below
+{code:sql}
+CREATE TABLE IF NOT EXISTS test.testtable (
+    field1 text PRIMARY KEY,
+    field2 text
+    field3 text
+) WITH ID = 0e9aa540-391f-11ef-945e-0be1221ff441
+    AND additional_write_policy = '99p'
+    AND bloom_filter_fp_chance = 0.01
+    AND caching = {'keys': 'ALL', 'rows_per_partition': 'NONE'}
+    AND cdc = false
+    AND comment = ''
+    AND compaction = {'class': 'org.apache.cassandra.db.compaction.SizeTieredCompactionStrategy', 'max_threshold': '32', 'min_threshold': '4'}
+    AND compression = {'chunk_length_in_kb': '16', 'class': 'org.apache.cassandra.io.compress.LZ4Compressor'}
+    AND memtable = 'default'
+    AND crc_check_chance = 1.0
+    AND default_time_to_live = 0
+    AND extensions = {}
+    AND gc_grace_seconds = 864000
+    AND max_index_interval = 2048
+    AND memtable_flush_period_in_ms = 0
+    AND min_index_interval = 128
+    AND read_repair = 'BLOCKING'
+    AND speculative_retry = '99p';
+ALTER TABLE test.testtable DROP field2 USING TIMESTAMP 1719999102807000;
+ALTER TABLE test.testtable DROP field3 USING TIMESTAMP 1719999102807001;
+{code}
+
+Found this bug while trying to restore the schema from a backup  created by copying a snapshot from a running node."
+CASSANDRA-19746,Update CQLSH website documentation to remove Python 2.7 reference,"The CQLSH [Compatibility (4.1)|https://cassandra.apache.org/doc/stable/cassandra/tools/cqlsh.html#compatibility] section mentions Python 2.7 but this should be Python 3 now.
+
+Note: it seems to be only an issue only with 4.1.
+
+The trunk link here is correct: [Compatibility (trunk)|https://cassandra.apache.org/doc/trunk/cassandra/managing/tools/cqlsh.html]"
+CASSANDRA-19744,Accord migration and interop correctness,"There are several issues around splitting and retrying mutations, using the original timestamp for batchlog/hints, batchlog/hint support in general, running Accord barriers only against the ranges actually owned by Accord.
+
+"
+CASSANDRA-19739,Move bcprov-jdk18on-1.76.jar to build deps,This came up after I bumped dependency-check version to 10.0.0 as suggested in CASSANDRA-19738.
+CASSANDRA-19738,Update dependency-check library to version 10.0.0,"Currently, we are at 9.0.5, which gives me locally basically this (1)
+
+Version 10.0.0 was released today and check is passing again.
+
+We should update it everywhere to 10.0.0
+
+(1) https://github.com/jeremylong/DependencyCheck/issues/6515"
+CASSANDRA-19737,Accord migration mode FULL always runs with interop,Whether we use interop is not done per transaction. Accord always seems to run with interop for every transaction when it is constructed with the factory that creates interop execution.
+CASSANDRA-19736,Batchlog and hint replay have timestamps replaced by Accord,"The issue is that we might create the transaction at a much later time and then the operation would be written to Cassandra with a later timestamp. It should be fine to use the minimum of the two.
+
+This also means that `USING TIMESTAMP` will also work as long as the provided timestamp is < the Accord timestamp."
+CASSANDRA-19735,Cannot correctly create keyspace statement with replication during schemaChange,"h3. What happened
+
+A specific schema change for creating keyspace with replications failed during Cassandra upgrade testing, but can pass under Cassandra distributed testing (non-upgrade).
+h3. How to reproduce:
+
+Put the following test under {{{}cassandra/test/distributed/org/apache/cassandra/distributed/upgrade/{}}}, and build dtest jars for any versions within [4.1.3, 5.0-alpha2].
+{code:java}
+package org.apache.cassandra.distributed.upgrade;
+public class demoUpgradeTest extends UpgradeTestBase
+    @Test
+    public void demoTest() throws Throwable {
+        new TestCase()
+                .nodes(1)
+                .nodesToUpgrade(1)
+                .withConfig(config -> config.with(NETWORK, GOSSIP, NATIVE_PROTOCOL))
+                .upgradesToCurrentFrom(v41)
+                .setup((cluster) -> {
+                    cluster.schemaChange(withKeyspace(""CREATE KEYSPACE %s WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 2}""));
+                }).runAfterNodeUpgrade((cluster, node) -> {
+                    // let's do nothing here.
+                }).run();
+    }
+} {code}
+Run the test with
+{code:java}
+$ ant test-jvm-dtest-some-Duse.jdk11=true -Dtest.name=org.apache.cassandra.distributed.upgrade.demoUpgradeTest {code}
+You will see the following failure:
+{code:java}
+[junit-timeout] Testcase: demoTest(org.apache.cassandra.distributed.upgrade.demoUpgradeTest)-_jdk11:    Caused an ERROR
+[junit-timeout] Cannot add existing keyspace ""distributed_test_keyspace""
+[junit-timeout] org.apache.cassandra.exceptions.AlreadyExistsException: Cannot add existing keyspace ""distributed_test_keyspace""
+[junit-timeout]     at org.apache.cassandra.cql3.statements.schema.CreateKeyspaceStatement.apply(CreateKeyspaceStatement.java:78)
+[junit-timeout]     at org.apache.cassandra.schema.DefaultSchemaUpdateHandler.apply(DefaultSchemaUpdateHandler.java:230)
+[junit-timeout]     at org.apache.cassandra.schema.Schema.transform(Schema.java:597)
+[junit-timeout]     at org.apache.cassandra.cql3.statements.schema.AlterSchemaStatement.execute(AlterSchemaStatement.java:114)
+[junit-timeout]     at org.apache.cassandra.cql3.statements.schema.AlterSchemaStatement.execute(AlterSchemaStatement.java:60)
+[junit-timeout]     at org.apache.cassandra.distributed.impl.Coordinator.unsafeExecuteInternal(Coordinator.java:122)
+[junit-timeout]     at org.apache.cassandra.distributed.impl.Coordinator.unsafeExecuteInternal(Coordinator.java:103)
+[junit-timeout]     at org.apache.cassandra.distributed.impl.Coordinator.lambda$executeWithResult$0(Coordinator.java:66)
+[junit-timeout]     at org.apache.cassandra.concurrent.FutureTask.call(FutureTask.java:61)
+[junit-timeout]     at org.apache.cassandra.concurrent.FutureTask.run(FutureTask.java:71)
+[junit-timeout]     at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1128)
+[junit-timeout]     at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:628)
+[junit-timeout]     at io.netty.util.concurrent.FastThreadLocalRunnable.run(FastThreadLocalRunnable.java:30)
+[junit-timeout]     at java.base/java.lang.Thread.run(Thread.java:829) {code}
+I have tested version pairs 4.1.3_4.1.4, 4.1.4_4.1.5, 4.1.5_5.0-alpha1, and 5.0-alpha1_5.0-alpha2. All of them have the same issue.
+
+I wrote a very similar test with Cassandra distributed test framework (non-upgrade test) as below:
+{code:java}
+package org.apache.cassandra.distributed.test.streaming;public class LCSStreamingKeepLevelTest extends TestBaseImpl
+{
+    @Test
+    public void demoTest() throws IOException
+    {
+        try (Cluster cluster = builder().withNodes(1)
+                .withConfig(config -> config.with(NETWORK, GOSSIP, NATIVE_PROTOCOL))
+                .start())
+        {
+            cluster.schemaChange(withKeyspace(""CREATE KEYSPACE %s WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 2}""));
+        }
+    }
+} {code}
+This distributed test would pass successfully without any issues.
+
+ 
+
+The expected behavior should be that the upgrade test above can also perform cluster.schemaChange() successfully."
+CASSANDRA-19728,Improve debug around paused and disabled compaction,"Compactions can be paused (from other operations) or disabled (nodetool), and when compactions are not running it can be unclear what the reason is.
+
+Add debug so this is clearer to catch for the operator."
+CASSANDRA-19727,[Analytics] Bulk writer fails validation stage when writing to a cluster using RandomPartitioner,"In bulk writer after writing SSTables, written data to SSTables is read back again to perform validations before shipping the files to the Cassandra instances. The logic to validate the SSTables assumes {{{}Murmur3Partitioner{}}}. This validation fails however when a bulk writer job is running against a cluster using the {{RandomPartitioner}} with the following stacktrace:
+
+
+{code}
+java.lang.RuntimeException: java.lang.IllegalStateException: Partitioner in ValidationMetadata does not match TableMetaData: org.apache.cassandra.dht.RandomPartitioner vs. org.apache.cassandra.dht.Murmur3Partitioner
+	at org.apache.cassandra.spark.utils.Throwing.lambda$function$2(Throwing.java:84)
+	at java.base/java.util.stream.ReferencePipeline$3$1.accept(ReferencePipeline.java:197)
+	at java.base/java.util.HashMap$KeySpliterator.forEachRemaining(HashMap.java:1707)
+	at java.base/java.util.stream.AbstractPipeline.copyInto(AbstractPipeline.java:509)
+	at java.base/java.util.stream.AbstractPipeline.wrapAndCopyInto(AbstractPipeline.java:499)
+	at java.base/java.util.stream.ReduceOps$ReduceOp.evaluateSequential(ReduceOps.java:921)
+	at java.base/java.util.stream.AbstractPipeline.evaluate(AbstractPipeline.java:234)
+	at java.base/java.util.stream.ReferencePipeline.collect(ReferencePipeline.java:682)
+	at org.apache.cassandra.spark.data.BasicSupplier.openAll(BasicSupplier.java:44)
+	at org.apache.cassandra.bridge.CassandraBridgeImplementation.getCompactionScanner(CassandraBridgeImplementation.java:248)
+	at org.apache.cassandra.spark.data.DataLayer.openCompactionScanner(DataLayer.java:262)
+	at org.apache.cassandra.spark.bulkwriter.SSTableWriter.validateSSTables(SSTableWriter.java:129)
+	at org.apache.cassandra.spark.bulkwriter.SSTableWriter.close(SSTableWriter.java:113)
+	at org.apache.cassandra.spark.bulkwriter.RecordWriter.finalizeSSTable(RecordWriter.java:224)
+	at org.apache.cassandra.spark.bulkwriter.RecordWriter.write(RecordWriter.java:122)
+	... 15 more
+{code}
+"
+CASSANDRA-19720,Accord Journal: Periodic Commit Log Mode,Introduce periodic mode to Accord journal
+CASSANDRA-19719,"CEP-15: (Accord) When nodes are removed from a cluster, need to update topology tracking to avoid being blocked","When doing a host replacement or decom nodes will leave the cluster and won't ever come back, this can put accord's topology sync logic into a bad state as its going to wait forever for those nodes to acknowledge the epoch or parts of the ranges."
+CASSANDRA-19718,CEP-15: (Accord) SyncPoint timeouts become a Exhausted rather than a Timeout and doesn’t get retried,"In Cassandra we try to make sure coordinators return timeout if every call under it was also a timeout, this makes it easier to understand what is going on (coordination failure due to timeouts looks very different than us just timing out), but accord doesn't do this; leading to an Exhausted error (which we don't retry)"
+CASSANDRA-19717,CEP-15 (C*): Don't run incremental repairs for accord only repairs,There's no reason to do anti-compaction for repairs that are only completing consensus operations and not moving data around
+CASSANDRA-19716,[Analytics] Invalid mapping when timestamp is used as a partition key during bulk writes,"When Cassandra has a table with a schema that includes a timestamp PK, i.e {{CREATE TABLE (a timestamp, b text, c text, PRIMARY KEY (a))}}, bulk writer maps the timestamp to a {{LongType}}. This causes the bulk writer job to produce a class cast exception when building the composite key during repartition and sorting of data in the spark job"
+CASSANDRA-19714,Use table-specific partitioners during Paxos repair,"Partition keys in the \{{system.paxos}} table are derived from the key involved in the paxos transaction. Initially, it was safe to assume that the paxos table itself used the same partitioner as the tables in the transactions as all distributed keyspaces and tables were configured with the global partitioner. This is no longer true as the \{{system_cluster_metadata.distributed_metadata_log}} has its own custom partitioner. 
+
+
+Likewise, \{{PaxosRepairHistory}} and the \{{system.paxos_repair_history}} table which makes that history durable map token ranges in the transacted tables to ballots. Prior to CASSANDRA-19482 it was safe to assume that these ranges contained tokens from the global partitioner but as this is no longer the case, we must use the specific partitioner for the table in question when working with ranges during paxos repair. "
+CASSANDRA-19713,Disallow denylisting keys in system_cluster_metadata,https://github.com/krummas/cassandra/commit/0435a9dbc382a428864b4b329e127882d9c18419
+CASSANDRA-19712,Fix gossip status after replacement,"Make sure gossip status is correct for replacement node.
+
+https://github.com/krummas/cassandra/commit/2ed38a6273def17e6decbb8e74826b1995800d59"
+CASSANDRA-19711,Ignore repair requests for system_cluster_metadata,"Since system_cluster_metadata is not replicated like other keyspaces we might break existing repair automation if a {{nodetool repair}} is run against a node not in the CMS. Just ignore the request if so.
+
+https://github.com/krummas/cassandra/commit/76437723acea35421ec5bf0412dcdee1411dcb6e"
+CASSANDRA-19710,Avoid ClassCastException when verifying tables with reversed partitioner,"A few TCM tables use a custom partitioner, this causes class cast exception when running nodetool verify on them.
+
+https://github.com/krummas/cassandra/commit/64897cb6382967f3e134752f5b9f223ff7daeb84"
+CASSANDRA-19709,Always repair the full range when repairing system_cluster_metadata,"Since system_cluster_metadata uses a custom partitioner we need to repair the full range whenever an operator uses -st and -et tokens to avoid breaking existing repair automations. This is fine since the amount of data in this keyspace should be small.
+
+https://github.com/krummas/cassandra/commit/6ab8fcd1126f67b0117e1ee3c1fd1d4b40ac2362"
+CASSANDRA-19708,Remove sid from bullseye docker images,"sid is flakey, often broken and takes days for correct packages to be uploaded.
+
+ref: https://ci-cassandra.apache.org/job/Cassandra-4.1-artifacts/jdk=jdk_1.8_latest,label=cassandra/611/ 
+
+sid is only used for jdk8
+
+looks like replacing it with temurin might be a safer/stable choice.
+
+"
+CASSANDRA-19705,Reconfigure CMS after move/bootstrap/replacement,"The CMS placement uses SimpleStrategy/NTS to decide where it is placed to make it easier to safely bounce a cluster using existing tools (with CMS placement {{dc1: 3, dc2: 3}} we will   use the placements for min_token in a NetworkTopologyStrategy with the same replication setting). 
+
+We need to reconfigure this after move/bootstrap/replacement though, since the placements might have changed."
+CASSANDRA-19704,UnsupportedOperationException is thrown when no space for LCS,"In {{CompactionTask#buildCompactionCandidatesForAvailableDiskSpace}} with LCS, if node has limited disk space and can't remove any sstable from L0 or L1 in {{{}LeveledCompactionTask#reduceScopeForLimitedSpace{}}}, {{LeveledCompactionTask#partialCompactionsAcceptable}} will throw {{UnsupportedOperationException}}.
+
+We should handle {{LeveledCompactionTask#partialCompactionsAcceptable}} more gracefully with {{return level <= 1}} or simply {{true}} since {{reduceScopeForLimitedSpace}} only removes sstable from L0 or L1.
+
+Related https://issues.apache.org/jira/browse/CASSANDRA-17272"
+CASSANDRA-19697,Test failure: materialized_views_test.py::TestMaterializedViews::test_rename_column_atomicity,Breaking this out from CASSANDRA-19683.  The byteman script fails to execute in 5.0/trunk after CASSANDRA-19534.
+CASSANDRA-19695,Accord Journal Simulation: Add instrumentation for Semaphore,
+CASSANDRA-19694,Make Accord timestamps strictly monotonic,
+CASSANDRA-19693,Relax slow_query_log_timeout for MultiNodeSAITest,"To stress the paging subsystem, we intentionally use a comically low fetch size in {{{}MultiNodeSAITest{}}}. This can lead to some very slow queries when we get matches into the hundreds of rows. It looks like CASSANDRA-19534 has gotten a little more aggressive about how the slow query timeout is triggered, and there’s a lot of noise around this in the logs, even in local runs. I think bumping the default slow query timeout and perhaps the native protocol timeout a bit should clear this up."
+CASSANDRA-19692,ClassCastException on selection with where clause from system.local_metadata_log,"{code}
+select * from system.local_metadata_log where epoch = 1;
+NoHostAvailable: ('Unable to complete the operation against any hosts', {<Host: 172.19.0.12:9042 dc2>: <Error from server: code=0000 [Server error] message=""java.lang.ClassCastException: class org.apache.cassandra.dht.Murmur3Partitioner$LongToken cannot be cast to class org.apache.cassandra.dht.ReversedLongLocalPartitioner$ReversedLongLocalToken (org.apache.cassandra.dht.Murmur3Partitioner$LongToken and org.apache.cassandra.dht.ReversedLongLocalPartitioner$ReversedLongLocalToken are in unnamed module of loader 'app')"">})
+{code}
+
+same select but with ""limit"" works."
+CASSANDRA-19687,ApplyThenWaitUntilApplied supplies wrong epoch for executeAtEpoch,It's from the `txnId` not the `executeAt`
+CASSANDRA-19685,Add auto_hints_cleanup_enabled to web documentation,"{{auto_hints_cleanup_enabled flag in cassandra.yaml is not documented in the [Cassandra web documentation|https://cassandra.apache.org/doc/stable/cassandra/operating/hints.html].}}
+
+Let’s add it there for completion."
+CASSANDRA-19683,Investigate dtest timeouts after CASSANDRA-19534,"We have seen increased dtest timeouts that don't appear to be environmental:
+
+https://app.circleci.com/pipelines/github/driftx/cassandra/1651/workflows/738d1c92-0ffe-45e7-8ad4-f2646170ba76
+
+https://ci-cassandra.apache.org/job/Cassandra-5.0/238/
+
+I have confirmed these don't occur before CASSANDRA-19534"
+CASSANDRA-19681,Debian repository is missing 3.11.17 package,"The Debian package for Cassandra 3.11.17 is missing from the JFrog artifactory. The [package index|https://apache.jfrog.io/artifactory/cassandra-deb/dists/311x/main/binary-amd64/Packages] is still referencing version 3.11.16:
+
+{code}
+Package: cassandra
+Version: 3.11.16
+...
+Filename: pool/main/c/cassandra/cassandra_3.11.16_all.deb
+...
+
+Package: cassandra-tools
+Source: cassandra
+Version: 3.11.16
+...
+Filename: pool/main/c/cassandra/cassandra-tools_3.11.16_all.deb
+...
+{code}
+
+When I tried to install the latest C* 3.11 version on Ubuntu, 3.11.16 got installed instead of 3.11.17.
+
+Note that this was originally reported by [Roman on Stack Exchange|https://dba.stackexchange.com/questions/340007/]."
+CASSANDRA-19680,Update URL in Java Driver README.md maven badge,The maven badge needs to be updated from com.datastax.oss to org.apache.cassandra.  Also add a license badge.
+CASSANDRA-19679,Stream processing for SimpleRestriction::bindAndGetClusteringElements,"Part 2 (of 2) of low-hanging fruit Stream performance improvements.
+
+The second main Stream contributor to allocations and CPU was SimpleRestriction::bindAndGetClusteringElements, which contributes to 5% of all allocations for a 50/50 workload. The image attached shows allocation profiling on _trunk_ (see purple highlighted sections for Stream-related allocs).
+
+The 'after' profile for a 50/50 workload shows a reduction from 4.58% allocations down to 1.37%. For a 90/10 (w/r) workload we see 4.28% decrease to 1.10%."
+CASSANDRA-19676,Stream processing for StorageProxy::updateCoordinatorWriteLatencyTableMetric,"On profiling a write-heavy workload (90% writes) using easy-cass-stress, it became very clear StorageProxy::updateCoordinatorWriteLatencyTableMetric was a hot path that ~15% of the CPU cycles of ModificationStatement::executeWithoutCondition were taken up by (see attached async-profiler image).
+
+We should convert this stream to a simple for loop, as has been discussed recently on the mail list.
+
+easy-cass-stress command:
+
+$ bin/easy-cass-stress run KeyValue -n 10m --maxwlat 10 -r 0.1 --rate 20000 --compaction twcs
+
+ "

@@ -1,18 +1,18 @@
 from jira import JIRA
 import csv
 
-jira = JIRA(server="https://issues.apache.org/jira")
+jira = JIRA(server="https://issues.apache.org/jira") #rest api
 
-jql_query = 'project = CASSANDRA AND status = Resolved'
+jql_query = 'project = CASSANDRA AND status = Resolved' #query
 
 start_at = 0
-max_results = 10
+max_results = 100 # we are using 100 pages
 
-issues = jira.search_issues(jql_query, startAt=start_at, maxResults=max_results)
+issues = jira.search_issues(jql_query, startAt=start_at, maxResults=max_results) 
 
 csv_file_name = 'resolved_issues_cassandra.csv'
 
-with open(csv_file_name, mode='w', newline='', encoding='utf-8') as file:
+with open(csv_file_name, mode='w', newline='', encoding='utf-8') as file: # this is basically writing the csv file
     writer = csv.writer(file)
     
     writer.writerow(["Bug ID", "Bug Summary", "Bug Description"])

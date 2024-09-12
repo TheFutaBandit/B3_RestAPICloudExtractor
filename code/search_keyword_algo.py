@@ -25,7 +25,7 @@ def search_algorithm(input_file, output_file):
     aging_related_bugs.to_csv(output_file, index=False)
 
 # Example usage:
-input_file = 'resolved_issues_cassandra.csv'    # Path to the input Excel file
-output_file = 'result.csv'  # Path to the output Excel file
+input_file = 'resolved_issues_cassandra_version3.csv'    # Path to the input Excel file
+output_file = 'result_version3.csv'  # Path to the output Excel file
 
 search_algorithm(input_file, output_file)

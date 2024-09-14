@@ -1,0 +1,26 @@
+Bug ID,File
+CASSANDRA-19880,CHANGES.txt
+CASSANDRA-19880,src/java/org/apache/cassandra/transport/messages/ExecuteMessage.java
+CASSANDRA-19880,test/unit/org/apache/cassandra/cql3/TraceCqlTest.java
+CASSANDRA-19820,test/unit/org/apache/cassandra/repair/FuzzTestBase.java
+CASSANDRA-19804,src/java/org/apache/cassandra/net/MessagingService.java
+CASSANDRA-19794,src/java/org/apache/cassandra/locator/CMSPlacementStrategy.java
+CASSANDRA-19794,src/java/org/apache/cassandra/tcm/transformations/cms/PrepareCMSReconfiguration.java
+CASSANDRA-19794,test/simulator/main/org/apache/cassandra/simulator/cluster/OnClusterLeave.java
+CASSANDRA-19794,test/simulator/main/org/apache/cassandra/simulator/cluster/OnClusterReplace.java
+CASSANDRA-19782,CHANGES.txt
+CASSANDRA-19782,src/java/org/apache/cassandra/tcm/listeners/LegacyStateListener.java
+CASSANDRA-19782,test/distributed/org/apache/cassandra/distributed/test/hostreplacement/HostReplacementTest.java
+CASSANDRA-19767,doc/scripts/convert_yaml_to_adoc.py
+CASSANDRA-19755,src/java/org/apache/cassandra/service/StorageProxy.java
+CASSANDRA-19755,src/java/org/apache/cassandra/service/paxos/Paxos.java
+CASSANDRA-19755,test/distributed/org/apache/cassandra/distributed/test/metrics/CoordinatorReadLatencyMetricTest.java
+CASSANDRA-19747,CHANGES.txt
+CASSANDRA-19747,src/java/org/apache/cassandra/schema/TableMetadata.java
+CASSANDRA-19747,test/unit/org/apache/cassandra/db/SchemaCQLHelperTest.java
+CASSANDRA-19704,CHANGES.txt
+CASSANDRA-19704,src/java/org/apache/cassandra/db/compaction/LeveledCompactionTask.java
+CASSANDRA-19704,test/distributed/org/apache/cassandra/distributed/test/LeveledCompactionTaskTest.java
+CASSANDRA-19693,CHANGES.txt
+CASSANDRA-19693,test/distributed/org/apache/cassandra/fuzz/sai/MultiNodeSAITest.java
+CASSANDRA-19693,test/harry/main/org/apache/cassandra/harry/sut/injvm/InJvmSutBase.java

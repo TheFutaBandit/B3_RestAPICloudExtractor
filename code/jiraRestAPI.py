@@ -6,7 +6,7 @@ jira = JIRA(server="https://issues.apache.org/jira") #rest api
 jql_query = 'project = CASSANDRA AND status = Resolved' #query
 
 start_at = 0
-max_results = 100 # we are using 100 pages
+max_results = 1000 # we are using 100 pages
 
 issues = jira.search_issues(jql_query, startAt=start_at, maxResults=max_results) 
 

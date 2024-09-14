@@ -16,7 +16,7 @@ def search_algorithm(input_file, output_file):
 
 
     aging_related_bugs = bug_reports[
-        bug_reports['Bug Description'].str.contains('|'.join(aging_keywords), case=False, na=False)
+        bug_reports['Bug Summary'].str.contains('|'.join(aging_keywords), case=False, na=False)
     ]
 
     aging_related_bugs = aging_related_bugs.drop_duplicates()
@@ -26,6 +26,6 @@ def search_algorithm(input_file, output_file):
 
 # Example usage:
 input_file = 'resolved_issues_cassandra.csv'    # Path to the input Excel file
-output_file = 'result.csv'  # Path to the output Excel file
+output_file = 'result_new.csv'  # Path to the output Excel file
 
 search_algorithm(input_file, output_file)

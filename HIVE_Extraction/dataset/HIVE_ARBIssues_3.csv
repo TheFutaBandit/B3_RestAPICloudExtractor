@@ -1,0 +1,141 @@
+Bug_ID,Bug_Summary,Bug_Description
+HIVE-19884,Invalidation cache may throw NPE when there is no data in table used by materialized view,
+HIVE-19777,NPE in TezSessionState,"Encountered while running ""insert into table values (..)""
+
+Looks like it is due to the fact that TezSessionState.close() sets console to null at the start of the method, and then calls getSession() which attempts to log to console.
+
+{noformat}
+java.lang.NullPointerException: null
+        at org.apache.hadoop.hive.ql.exec.tez.TezSessionState.getSession(TezSessionState.java:711) ~[hive-exec-4.0.0-SNAPSHOT.jar:4.0.0-SNAPSHOT]
+        at org.apache.hadoop.hive.ql.exec.tez.TezSessionState.close(TezSessionState.java:646) ~[hive-exec-4.0.0-SNAPSHOT.jar:4.0.0-SNAPSHOT]
+        at org.apache.hadoop.hive.ql.exec.tez.TezSessionPoolManager.closeIfNotDefault(TezSessionPoolManager.java:353) ~[hive-exec-4.0.0-SNAPSHOT.jar:4.0.0-SNAPSHOT]
+        at org.apache.hadoop.hive.ql.exec.tez.TezSessionPoolManager.getSession(TezSessionPoolManager.java:467) ~[hive-exec-4.0.0-SNAPSHOT.jar:4.0.0-SNAPSHOT]
+        at org.apache.hadoop.hive.ql.exec.tez.WorkloadManagerFederation.getUnmanagedSession(WorkloadManagerFederation.java:66) ~[hive-exec-4.0.0-SNAPSHOT.jar:4.0.0-SNAPSHOT]
+        at org.apache.hadoop.hive.ql.exec.tez.WorkloadManagerFederation.getSession(WorkloadManagerFederation.java:38) ~[hive-exec-4.0.0-SNAPSHOT.jar:4.0.0-SNAPSHOT]
+        at org.apache.hadoop.hive.ql.exec.tez.TezTask.execute(TezTask.java:184) ~[hive-exec-4.0.0-SNAPSHOT.jar:4.0.0-SNAPSHOT]
+        at org.apache.hadoop.hive.ql.exec.Task.executeTask(Task.java:205) ~[hive-exec-4.0.0-SNAPSHOT.jar:4.0.0-SNAPSHOT]
+        at org.apache.hadoop.hive.ql.exec.TaskRunner.runSequential(TaskRunner.java:97) ~[hive-exec-4.0.0-SNAPSHOT.jar:4.0.0-SNAPSHOT]
+        at org.apache.hadoop.hive.ql.Driver.launchTask(Driver.java:2497) ~[hive-exec-4.0.0-SNAPSHOT.jar:4.0.0-SNAPSHOT]
+        at org.apache.hadoop.hive.ql.Driver.execute(Driver.java:2149) ~[hive-exec-4.0.0-SNAPSHOT.jar:4.0.0-SNAPSHOT]
+        at org.apache.hadoop.hive.ql.Driver.runInternal(Driver.java:1826) ~[hive-exec-4.0.0-SNAPSHOT.jar:4.0.0-SNAPSHOT]
+        at org.apache.hadoop.hive.ql.Driver.run(Driver.java:1569) ~[hive-exec-4.0.0-SNAPSHOT.jar:4.0.0-SNAPSHOT]
+        at org.apache.hadoop.hive.ql.Driver.run(Driver.java:1563) ~[hive-exec-4.0.0-SNAPSHOT.jar:4.0.0-SNAPSHOT]
+        at org.apache.hadoop.hive.ql.reexec.ReExecDriver.run(ReExecDriver.java:157) ~[hive-exec-4.0.0-SNAPSHOT.jar:4.0.0-SNAPSHOT]
+        at org.apache.hadoop.hive.ql.reexec.ReExecDriver.run(ReExecDriver.java:218) ~[hive-exec-4.0.0-SNAPSHOT.jar:4.0.0-SNAPSHOT]
+        at org.apache.hadoop.hive.cli.CliDriver.processLocalCmd(CliDriver.java:239) ~[hive-cli-4.0.0-SNAPSHOT.jar:4.0.0-SNAPSHOT]
+        at org.apache.hadoop.hive.cli.CliDriver.processCmd(CliDriver.java:188) ~[hive-cli-4.0.0-SNAPSHOT.jar:4.0.0-SNAPSHOT]
+        at org.apache.hadoop.hive.cli.CliDriver.processLine(CliDriver.java:402) ~[hive-cli-4.0.0-SNAPSHOT.jar:4.0.0-SNAPSHOT]
+        at org.apache.hadoop.hive.cli.CliDriver.executeDriver(CliDriver.java:821) ~[hive-cli-4.0.0-SNAPSHOT.jar:4.0.0-SNAPSHOT]
+        at org.apache.hadoop.hive.cli.CliDriver.run(CliDriver.java:759) ~[hive-cli-4.0.0-SNAPSHOT.jar:4.0.0-SNAPSHOT]
+        at org.apache.hadoop.hive.cli.CliDriver.main(CliDriver.java:683) ~[hive-cli-4.0.0-SNAPSHOT.jar:4.0.0-SNAPSHOT]
+        at sun.reflect.NativeMethodAccessorImpl.invoke0(Native Method) ~[?:1.8.0_121]
+        at sun.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62) ~[?:1.8.0_121]
+        at sun.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43) ~[?:1.8.0_121]
+        at java.lang.reflect.Method.invoke(Method.java:498) ~[?:1.8.0_121]
+        at org.apache.hadoop.util.RunJar.run(RunJar.java:308) ~[hadoop-common-3.0.0.3.0.0.0-SNAPSHOT.jar:?]
+        at org.apache.hadoop.util.RunJar.main(RunJar.java:222) ~[hadoop-common-3.0.0.3.0.0.0-SNAPSHOT.jar:?]
+{noformat}"
+HIVE-19731,Change staging tmp directory used by TestHCatLoaderComplexSchema,"Another one that is set to default and hence is flaky.
+
+https://builds.apache.org/job/PreCommit-HIVE-Build/11321/testReport/org.apache.hive.hcatalog.pig/TestHCatLoaderComplexSchema/testSyntheticComplexSchema_3_/
+
+{noformat}
+org.apache.hadoop.util.Shell$ExitCodeException: chmod: cannot access ‘/tmp/hadoop/mapred/staging/hiveptest985275899/.staging/job_local985275899_0088’: No such file or directory
+
+	at org.apache.hadoop.util.Shell.runCommand(Shell.java:1009) ~[hadoop-common-3.1.0.jar:?]
+	at org.apache.hadoop.util.Shell.run(Shell.java:902) ~[hadoop-common-3.1.0.jar:?]
+	at org.apache.hadoop.util.Shell$ShellCommandExecutor.execute(Shell.java:1227) ~[hadoop-common-3.1.0.jar:?]
+	at org.apache.hadoop.util.Shell.execCommand(Shell.java:1321) ~[hadoop-common-3.1.0.jar:?]
+	at org.apache.hadoop.util.Shell.execCommand(Shell.java:1303) ~[hadoop-common-3.1.0.jar:?]
+	at org.apache.hadoop.fs.RawLocalFileSystem.setPermission(RawLocalFileSystem.java:840) ~[hadoop-common-3.1.0.jar:?]
+	at org.apache.hadoop.fs.ChecksumFileSystem$1.apply(ChecksumFileSystem.java:508) ~[hadoop-common-3.1.0.jar:?]
+	at org.apache.hadoop.fs.ChecksumFileSystem$FsOperation.run(ChecksumFileSystem.java:489) ~[hadoop-common-3.1.0.jar:?]
+	at org.apache.hadoop.fs.ChecksumFileSystem.setPermission(ChecksumFileSystem.java:511) ~[hadoop-common-3.1.0.jar:?]
+	at org.apache.hadoop.fs.FileSystem.mkdirs(FileSystem.java:727) ~[hadoop-common-3.1.0.jar:?]
+	at org.apache.hadoop.mapreduce.JobResourceUploader.mkdirs(JobResourceUploader.java:658) ~[hadoop-mapreduce-client-core-3.1.0.jar:?]
+	at org.apache.hadoop.mapreduce.JobResourceUploader.uploadResourcesInternal(JobResourceUploader.java:172) ~[hadoop-mapreduce-client-core-3.1.0.jar:?]
+	at org.apache.hadoop.mapreduce.JobResourceUploader.uploadResources(JobResourceUploader.java:133) ~[hadoop-mapreduce-client-core-3.1.0.jar:?]
+	at org.apache.hadoop.mapreduce.JobSubmitter.copyAndConfigureFiles(JobSubmitter.java:102) ~[hadoop-mapreduce-client-core-3.1.0.jar:?]
+	at org.apache.hadoop.mapreduce.JobSubmitter.submitJobInternal(JobSubmitter.java:197) ~[hadoop-mapreduce-client-core-3.1.0.jar:?]
+	at org.apache.hadoop.mapreduce.Job$11.run(Job.java:1570) ~[hadoop-mapreduce-client-core-3.1.0.jar:?]
+	at org.apache.hadoop.mapreduce.Job$11.run(Job.java:1567) ~[hadoop-mapreduce-client-core-3.1.0.jar:?]
+	at java.security.AccessController.doPrivileged(Native Method) ~[?:1.8.0_102]
+	at javax.security.auth.Subject.doAs(Subject.java:422) ~[?:1.8.0_102]
+	at org.apache.hadoop.security.UserGroupInformation.doAs(UserGroupInformation.java:1682) ~[hadoop-common-3.1.0.jar:?]
+	at org.apache.hadoop.mapreduce.Job.submit(Job.java:1567) ~[hadoop-mapreduce-client-core-3.1.0.jar:?]
+	at org.apache.hadoop.mapreduce.lib.jobcontrol.ControlledJob.submit(ControlledJob.java:336) [hadoop-mapreduce-client-core-3.1.0.jar:?]
+	at sun.reflect.GeneratedMethodAccessor36.invoke(Unknown Source) ~[?:?]
+	at sun.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43) ~[?:1.8.0_102]
+	at java.lang.reflect.Method.invoke(Method.java:498) ~[?:1.8.0_102]
+	at org.apache.pig.backend.hadoop23.PigJobControl.submit(PigJobControl.java:128) [pig-0.16.0-h2.jar:?]
+	at org.apache.pig.backend.hadoop23.PigJobControl.run(PigJobControl.java:194) [pig-0.16.0-h2.jar:?]
+	at java.lang.Thread.run(Thread.java:745) [?:1.8.0_102]
+	at org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.MapReduceLauncher$1.run(MapReduceLauncher.java:276) [pig-0.16.0-h2.jar:?]
+{noformat}"
+HIVE-19654,Change tmp staging mapred directory for TestBlobstoreCliDriver,Similar to HIVE-19626.
+HIVE-19626,Change tmp staging mapred directory for CliDriver,"We do not see many failures anymore, but one of the intermittent ones is this:
+https://builds.apache.org/job/PreCommit-HIVE-Build/11101/testReport/junit/org.apache.hadoop.hive.cli/TestCliDriver/testCliDriver_localtimezone_/
+
+As with other tests, we can change the staging directory property value."
+HIVE-19423,REPL LOAD creates staging directory in source dump directory instead of table data location,REPL LOAD creates staging directory in source dump directory instead of table data location. In case of replication from on-perm to cloud it can create problem. 
+HIVE-19331,"Repl load config in ""with"" clause not pass to Context.getStagingDir","Another failure similar to HIVE-18626, causing exception when s3 credentials are in ""REPL LOAD"" with clause.
+
+{code}
+Caused by: java.lang.IllegalStateException: Error getting FileSystem for s3a://nat-yc-r7-nmys-beacon-cloud-s3-2/hive_incremental_testing.db/hive_incremental_testing_new_tabl...: org.apache.hadoop.fs.s3a.AWSClientIOException: doesBucketExist on nat-yc-r7-nmys-beacon-cloud-s3-2: com.amazonaws.AmazonClientException: No AWS Credentials provided by BasicAWSCredentialsProvider EnvironmentVariableCredentialsProvider SharedInstanceProfileCredentialsProvider : com.amazonaws.AmazonClientException: Unable to load credentials from Amazon EC2 metadata service: No AWS Credentials provided by BasicAWSCredentialsProvider EnvironmentVariableCredentialsProvider SharedInstanceProfileCredentialsProvider : com.amazonaws.AmazonClientException: Unable to load credentials from Amazon EC2 metadata service
+        at org.apache.hadoop.hive.ql.Context.getStagingDir(Context.java:359)
+        at org.apache.hadoop.hive.ql.Context.getExternalScratchDir(Context.java:487)
+        at org.apache.hadoop.hive.ql.Context.getExternalTmpPath(Context.java:565)
+        at org.apache.hadoop.hive.ql.parse.ImportSemanticAnalyzer.loadTable(ImportSemanticAnalyzer.java:370)
+        at org.apache.hadoop.hive.ql.parse.ImportSemanticAnalyzer.createReplImportTasks(ImportSemanticAnalyzer.java:926)
+        at org.apache.hadoop.hive.ql.parse.ImportSemanticAnalyzer.prepareImport(ImportSemanticAnalyzer.java:329)
+        at org.apache.hadoop.hive.ql.parse.repl.load.message.TableHandler.handle(TableHandler.java:43)
+        ... 24 more
+{code}"
+HIVE-19222,"TestNegativeCliDriver tests are failing due to ""java.lang.OutOfMemoryError: GC overhead limit exceeded""",TestNegativeCliDriver tests are failing with OOM recently. Not sure why. I will try to increase the memory to test out.  
+HIVE-19206,Automatic memory management for open streaming writers,"Problem:
+ When there are 100s of record updaters open, the amount of memory required by orc writers keeps growing because of ORC's internal buffers. This can lead to potential high GC or OOM during streaming ingest.
+
+Solution:
+ The high level idea is for the streaming connection to remember all the open record updaters and flush the record updater periodically (at some interval). Records written to each record updater can be used as a metric to determine the candidate record updaters for flushing. 
+ If stripe size of orc file is 64MB, the default memory management check happens only after every 5000 rows which may which may be too late when there are too many concurrent writers in a process. Example case would be 100 writers open and each of them have almost full stripe of 64MB buffered data, this would take 100*64MB ~=6GB of memory. When all of the record writers flush, the memory usage drops down to 100*~2MB which is just ~200MB memory usage."
+HIVE-19126,CachedStore: Use memory estimation to limit cache size during prewarm,"We can rely on https://github.com/apache/hive/blob/master/llap-server/src/java/org/apache/hadoop/hive/llap/IncrementalObjectSizeEstimator.java to estimate memory of SharedCache. This jira addresses the size estimation during prewarm, so that we can stop when we hit the memory limit. In a follow-up jira, we will work on estimation/eviction after prewarm is complete, so that we can keep the frequently used tables and their partitions in cache."
+HIVE-18946,Fix columnstats merge NPE,"after analyzing an empty table may lead to an NPE when inserting into it...
+
+{code}
+2018-03-13T06:54:22,503 ERROR [df3fb505-e0bc-4595-a874-b735dab8dff6 main] metastore.RetryingHMSHandler: java.lang.NullPointerException
+        at org.apache.hadoop.hive.metastore.api.Decimal.compareTo(Decimal.java:318)
+        at org.apache.hadoop.hive.metastore.columnstats.merge.DecimalColumnStatsMerger.merge(DecimalColumnStatsMerger.java:35)
+        at org.apache.hadoop.hive.metastore.utils.MetaStoreUtils.mergeColStats(MetaStoreUtils.java:778)
+        at org.apache.hadoop.hive.metastore.HiveMetaStore$HMSHandler.set_aggr_stats_for(HiveMetaStore.java:6934)
+        at sun.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+        at sun.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62)
+        at sun.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+        at java.lang.reflect.Method.invoke(Method.java:498)
+        at org.apache.hadoop.hive.metastore.RetryingHMSHandler.invokeInternal(RetryingHMSHandler.java:147)
+        at org.apache.hadoop.hive.metastore.RetryingHMSHandler.invoke(RetryingHMSHandler.java:108)
+        at com.sun.proxy.$Proxy55.set_aggr_stats_for(Unknown Source)
+[...]
+{code}
+
+reproduce
+
+{code}
+set hive.stats.autogather=true;
+set hive.explain.user=true;
+
+drop table if exists testdeci2;
+
+create table testdeci2(
+id int,
+amount decimal(10,3),
+sales_tax decimal(10,3),
+item string)
+stored as orc location '/tmp/testdeci2'
+TBLPROPERTIES (""transactional""=""false"")
+;
+
+
+analyze table testdeci2 compute statistics for columns;
+
+insert into table testdeci2 values(1,12.123,12345.123,'desk1'),(2,123.123,1234.123,'desk2');
+{code}"

@@ -1,4 +1,7 @@
 import pandas as pd
+import numpy as np
+
+count = 0
 
 def search_algorithm(input_file, output_file):
     df = pd.read_csv(input_file)
@@ -14,13 +17,19 @@ def search_algorithm(input_file, output_file):
 
     aging_related_bugs = bug_reports[
         bug_reports['Bug_Summary'].str.contains('|'.join(aging_keywords),case=False, na=False)
+        
     ]
 
+    
     aging_related_bugs.drop_duplicates
+
+    print(aging_related_bugs.shape[0])
 
     aging_related_bugs.to_csv(output_file, index=False)
 
 input_file = 'dataset/HIVE_Closed_3.csv'
 output_file = 'dataset/HIVE_ARBIssues_3.csv'
 
+
 search_algorithm(input_file,output_file)
+

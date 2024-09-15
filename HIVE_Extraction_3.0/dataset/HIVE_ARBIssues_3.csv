@@ -1,0 +1,149 @@
+Bug_ID,Bug_Summary,Bug_Description
+HIVE-24636,Memory leak due to stacking UDFClassLoader in Apache Commons LogFactory,"Much the same as [HIVE-7563|https://issues.apache.org/jira/browse/HIVE-7563], after ClassLoader is closed in JavaUtils, it should be released by Apache Commons LogFactory, or the ClassLoader can't be Garbage Collected, which leads to memory leak, exactly our PROD met."
+HIVE-23873,Querying Hive JDBCStorageHandler table fails with NPE when CBO is off,"Scenario is Hive table having same schema as table in Oracle, however when we query the table with data it fails with NPE, below is the trace.
+
+{code}
+Caused by: java.io.IOException: java.lang.NullPointerException
+        at org.apache.hadoop.hive.ql.exec.FetchOperator.getNextRow(FetchOperator.java:617) ~[hive-exec-3.1.0.3.1.5.0-152.jar:3.1.0.3.1.5.0-152]
+        at org.apache.hadoop.hive.ql.exec.FetchOperator.pushRow(FetchOperator.java:524) ~[hive-exec-3.1.0.3.1.5.0-152.jar:3.1.0.3.1.5.0-152]
+        at org.apache.hadoop.hive.ql.exec.FetchTask.fetch(FetchTask.java:146) ~[hive-exec-3.1.0.3.1.5.0-152.jar:3.1.0.3.1.5.0-152]
+        at org.apache.hadoop.hive.ql.Driver.getResults(Driver.java:2739) ~[hive-exec-3.1.0.3.1.5.0-152.jar:3.1.0.3.1.5.0-152]
+        at org.apache.hadoop.hive.ql.reexec.ReExecDriver.getResults(ReExecDriver.java:229) ~[hive-exec-3.1.0.3.1.5.0-152.jar:3.1.0.3.1.5.0-152]
+        at org.apache.hive.service.cli.operation.SQLOperation.getNextRowSet(SQLOperation.java:473) ~[hive-service-3.1.0.3.1.5.0-152.jar:3.1.0.3.1.5.0-152]
+        ... 34 more
+Caused by: java.lang.NullPointerException
+        at org.apache.hive.storage.jdbc.JdbcSerDe.deserialize(JdbcSerDe.java:164) ~[hive-jdbc-handler-3.1.0.3.1.5.0-152.jar:3.1.0.3.1.5.0-152]
+        at org.apache.hadoop.hive.ql.exec.FetchOperator.getNextRow(FetchOperator.java:598) ~[hive-exec-3.1.0.3.1.5.0-152.jar:3.1.0.3.1.5.0-152]
+        at org.apache.hadoop.hive.ql.exec.FetchOperator.pushRow(FetchOperator.java:524) ~[hive-exec-3.1.0.3.1.5.0-152.jar:3.1.0.3.1.5.0-152]
+        at org.apache.hadoop.hive.ql.exec.FetchTask.fetch(FetchTask.java:146) ~[hive-exec-3.1.0.3.1.5.0-152.jar:3.1.0.3.1.5.0-152]
+        at org.apache.hadoop.hive.ql.Driver.getResults(Driver.java:2739) ~[hive-exec-3.1.0.3.1.5.0-152.jar:3.1.0.3.1.5.0-152]
+        at org.apache.hadoop.hive.ql.reexec.ReExecDriver.getResults(ReExecDriver.java:229) ~[hive-exec-3.1.0.3.1.5.0-152.jar:3.1.0.3.1.5.0-152]
+        at org.apache.hive.service.cli.operation.SQLOperation.getNextRowSet(SQLOperation.java:473) ~[hive-service-3.1.0.3.1.5.0-152.jar:3.1.0.3.1.5.0-152]
+        ... 34 more
+{code}
+
+Problem appears when column names in Oracle are in Upper case and since in Hive, table and column names are forced to store in lowercase during creation. User runs into NPE error while fetching data.
+
+While deserializing data, input consists of column names in lower case which fails to get the value
+
+https://github.com/apache/hive/blob/rel/release-3.1.2/jdbc-handler/src/main/java/org/apache/hive/storage/jdbc/JdbcSerDe.java#L136
+{code}
+rowVal = ((ObjectWritable)value).get();
+{code}
+
+Log Snio:
+=============
+{code}
+2020-07-17T16:49:09,598 INFO  [04ed42ec-91d2-4662-aee7-37e840a06036 HiveServer2-Handler-Pool: Thread-104]: dao.GenericJdbcDatabaseAccessor (:()) - Query to execute is [select * from TESTHIVEJDBCSTORAGE]
+2020-07-17T16:49:10,642 INFO  [04ed42ec-91d2-4662-aee7-37e840a06036 HiveServer2-Handler-Pool: Thread-104]: jdbc.JdbcSerDe (:()) - *** ColumnKey = ID
+2020-07-17T16:49:10,642 INFO  [04ed42ec-91d2-4662-aee7-37e840a06036 HiveServer2-Handler-Pool: Thread-104]: jdbc.JdbcSerDe (:()) - *** Blob value = {fname=OW[class=class java.lang.String,value=Name1], id=OW[class=class java.lang.Integer,value=1]}
+{code}
+
+Simple Reproducer for this case.
+=============
+1. Create table in Oracle
+{code}
+create table TESTHIVEJDBCSTORAGE(ID INT, FNAME VARCHAR(20));
+{code}
+
+2. Insert dummy data.
+{code}
+Insert into TESTHIVEJDBCSTORAGE values (1, 'Name1');
+{code}
+
+3. Create JDBCStorageHandler table in Hive.
+{code}
+CREATE EXTERNAL TABLE default.TESTHIVEJDBCSTORAGE_HIVE_TBL (ID INT, FNAME VARCHAR(20)) 
+STORED BY 'org.apache.hive.storage.jdbc.JdbcStorageHandler' 
+TBLPROPERTIES ( 
+""hive.sql.database.type"" = ""ORACLE"", 
+""hive.sql.jdbc.driver"" = ""oracle.jdbc.OracleDriver"", 
+""hive.sql.jdbc.url"" = ""jdbc:oracle:thin:@orachehostname/XE"", 
+""hive.sql.dbcp.username"" = ""chiran"", 
+""hive.sql.dbcp.password"" = ""supersecurepassword"", 
+""hive.sql.table"" = ""TESTHIVEJDBCSTORAGE"", 
+""hive.sql.dbcp.maxActive"" = ""1"" 
+);
+{code}
+
+4. Query Hive table, fails with NPE.
+{code}
+> select * from default.TESTHIVEJDBCSTORAGE_HIVE_TBL;
+INFO  : Compiling command(queryId=hive_20200717164857_cd6f5020-4a69-4a2d-9e63-9db99d0121bc): select * from default.TESTHIVEJDBCSTORAGE_HIVE_TBL
+INFO  : Semantic Analysis Completed (retrial = false)
+INFO  : Returning Hive schema: Schema(fieldSchemas:[FieldSchema(name:testhivejdbcstorage_hive_tbl.id, type:int, comment:null), FieldSchema(name:testhivejdbcstorage_hive_tbl.fname, type:varchar(20), comment:null)], properties:null)
+INFO  : Completed compiling command(queryId=hive_20200717164857_cd6f5020-4a69-4a2d-9e63-9db99d0121bc); Time taken: 9.914 seconds
+INFO  : Executing command(queryId=hive_20200717164857_cd6f5020-4a69-4a2d-9e63-9db99d0121bc): select * from default.TESTHIVEJDBCSTORAGE_HIVE_TBL
+INFO  : Completed executing command(queryId=hive_20200717164857_cd6f5020-4a69-4a2d-9e63-9db99d0121bc); Time taken: 0.019 seconds
+INFO  : OK
+Error: java.io.IOException: java.lang.NullPointerException (state=,code=0)
+{code}
+
+Assuming that there are no repercussions, can we convert the column names to lowercase fetched from Database/Query pointing to table in JDBCStorageHandler?
+Attaching the patch for the case."
+HIVE-21342,Analyze compute stats for column leave behind staging dir on hdfs,"staging dir cleanup does not happen for the ""analyze table .. compute statistics for columns"", this leads to stale directory on hdfs.
+the problem seems to be with ColumnStatsSemanticAnalyzer which don't have hdfscleanup set for the context.
+https://github.com/apache/hive/blob/master/ql/src/java/org/apache/hadoop/hive/ql/parse/ColumnStatsSemanticAnalyzer.java#L310"
+HIVE-20192,HS2 with embedded metastore is leaking JDOPersistenceManager objects.,"Hiveserver2 instances where crashing every 3-4 days and observed HS2 in on unresponsive state. Also, observed that the FGC collection happening regularly
+
+From JXray report it is seen that pmCache(List of JDOPersistenceManager objects) is occupying 84% of the heap and there are around 16,000 references of UDFClassLoader.
+{code:java}
+10,759,230K (84.7%) Object tree for GC root(s) Java Static org.apache.hadoop.hive.metastore.ObjectStore.pmf
+- org.datanucleus.api.jdo.JDOPersistenceManagerFactory.pmCache ↘ 10,744,419K (84.6%), 1 reference(s)
+  - j.u.Collections$SetFromMap.m ↘ 10,744,419K (84.6%), 1 reference(s)
+    - {java.util.concurrent.ConcurrentHashMap}.keys ↘ 10,743,764K (84.5%), 16,872 reference(s)
+      - org.datanucleus.api.jdo.JDOPersistenceManager.ec ↘ 10,738,831K (84.5%), 16,872 reference(s)
+        ... 3 more references together retaining 4,933K (< 0.1%)
+    - java.util.concurrent.ConcurrentHashMap self 655K (< 0.1%), 1 object(s)
+      ... 2 more references together retaining 48b (< 0.1%)
+- org.datanucleus.api.jdo.JDOPersistenceManagerFactory.nucleusContext ↘ 14,810K (0.1%), 1 reference(s)
+... 3 more references together retaining 96b (< 0.1%){code}
+When the RawStore object is re-created, it is not allowed to be updated into the ThreadWithGarbageCleanup.threadRawStoreMap which leads to the new RawStore never gets cleaned-up when the thread exit.
+
+ "
+HIVE-19970,Replication dump has a NPE when table is empty,if table directory or partition directory is missing ..dump is throwing NPE instead of file missing exception.
+HIVE-19884,Invalidation cache may throw NPE when there is no data in table used by materialized view,
+HIVE-19731,Change staging tmp directory used by TestHCatLoaderComplexSchema,"Another one that is set to default and hence is flaky.
+
+https://builds.apache.org/job/PreCommit-HIVE-Build/11321/testReport/org.apache.hive.hcatalog.pig/TestHCatLoaderComplexSchema/testSyntheticComplexSchema_3_/
+
+{noformat}
+org.apache.hadoop.util.Shell$ExitCodeException: chmod: cannot access ‘/tmp/hadoop/mapred/staging/hiveptest985275899/.staging/job_local985275899_0088’: No such file or directory
+
+	at org.apache.hadoop.util.Shell.runCommand(Shell.java:1009) ~[hadoop-common-3.1.0.jar:?]
+	at org.apache.hadoop.util.Shell.run(Shell.java:902) ~[hadoop-common-3.1.0.jar:?]
+	at org.apache.hadoop.util.Shell$ShellCommandExecutor.execute(Shell.java:1227) ~[hadoop-common-3.1.0.jar:?]
+	at org.apache.hadoop.util.Shell.execCommand(Shell.java:1321) ~[hadoop-common-3.1.0.jar:?]
+	at org.apache.hadoop.util.Shell.execCommand(Shell.java:1303) ~[hadoop-common-3.1.0.jar:?]
+	at org.apache.hadoop.fs.RawLocalFileSystem.setPermission(RawLocalFileSystem.java:840) ~[hadoop-common-3.1.0.jar:?]
+	at org.apache.hadoop.fs.ChecksumFileSystem$1.apply(ChecksumFileSystem.java:508) ~[hadoop-common-3.1.0.jar:?]
+	at org.apache.hadoop.fs.ChecksumFileSystem$FsOperation.run(ChecksumFileSystem.java:489) ~[hadoop-common-3.1.0.jar:?]
+	at org.apache.hadoop.fs.ChecksumFileSystem.setPermission(ChecksumFileSystem.java:511) ~[hadoop-common-3.1.0.jar:?]
+	at org.apache.hadoop.fs.FileSystem.mkdirs(FileSystem.java:727) ~[hadoop-common-3.1.0.jar:?]
+	at org.apache.hadoop.mapreduce.JobResourceUploader.mkdirs(JobResourceUploader.java:658) ~[hadoop-mapreduce-client-core-3.1.0.jar:?]
+	at org.apache.hadoop.mapreduce.JobResourceUploader.uploadResourcesInternal(JobResourceUploader.java:172) ~[hadoop-mapreduce-client-core-3.1.0.jar:?]
+	at org.apache.hadoop.mapreduce.JobResourceUploader.uploadResources(JobResourceUploader.java:133) ~[hadoop-mapreduce-client-core-3.1.0.jar:?]
+	at org.apache.hadoop.mapreduce.JobSubmitter.copyAndConfigureFiles(JobSubmitter.java:102) ~[hadoop-mapreduce-client-core-3.1.0.jar:?]
+	at org.apache.hadoop.mapreduce.JobSubmitter.submitJobInternal(JobSubmitter.java:197) ~[hadoop-mapreduce-client-core-3.1.0.jar:?]
+	at org.apache.hadoop.mapreduce.Job$11.run(Job.java:1570) ~[hadoop-mapreduce-client-core-3.1.0.jar:?]
+	at org.apache.hadoop.mapreduce.Job$11.run(Job.java:1567) ~[hadoop-mapreduce-client-core-3.1.0.jar:?]
+	at java.security.AccessController.doPrivileged(Native Method) ~[?:1.8.0_102]
+	at javax.security.auth.Subject.doAs(Subject.java:422) ~[?:1.8.0_102]
+	at org.apache.hadoop.security.UserGroupInformation.doAs(UserGroupInformation.java:1682) ~[hadoop-common-3.1.0.jar:?]
+	at org.apache.hadoop.mapreduce.Job.submit(Job.java:1567) ~[hadoop-mapreduce-client-core-3.1.0.jar:?]
+	at org.apache.hadoop.mapreduce.lib.jobcontrol.ControlledJob.submit(ControlledJob.java:336) [hadoop-mapreduce-client-core-3.1.0.jar:?]
+	at sun.reflect.GeneratedMethodAccessor36.invoke(Unknown Source) ~[?:?]
+	at sun.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43) ~[?:1.8.0_102]
+	at java.lang.reflect.Method.invoke(Method.java:498) ~[?:1.8.0_102]
+	at org.apache.pig.backend.hadoop23.PigJobControl.submit(PigJobControl.java:128) [pig-0.16.0-h2.jar:?]
+	at org.apache.pig.backend.hadoop23.PigJobControl.run(PigJobControl.java:194) [pig-0.16.0-h2.jar:?]
+	at java.lang.Thread.run(Thread.java:745) [?:1.8.0_102]
+	at org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.MapReduceLauncher$1.run(MapReduceLauncher.java:276) [pig-0.16.0-h2.jar:?]
+{noformat}"
+HIVE-19654,Change tmp staging mapred directory for TestBlobstoreCliDriver,Similar to HIVE-19626.
+HIVE-19206,Automatic memory management for open streaming writers,"Problem:
+ When there are 100s of record updaters open, the amount of memory required by orc writers keeps growing because of ORC's internal buffers. This can lead to potential high GC or OOM during streaming ingest.
+
+Solution:
+ The high level idea is for the streaming connection to remember all the open record updaters and flush the record updater periodically (at some interval). Records written to each record updater can be used as a metric to determine the candidate record updaters for flushing. 
+ If stripe size of orc file is 64MB, the default memory management check happens only after every 5000 rows which may which may be too late when there are too many concurrent writers in a process. Example case would be 100 writers open and each of them have almost full stripe of 64MB buffered data, this would take 100*64MB ~=6GB of memory. When all of the record writers flush, the memory usage drops down to 100*~2MB which is just ~200MB memory usage."

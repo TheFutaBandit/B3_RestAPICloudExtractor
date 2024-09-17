@@ -1,1 +1,4 @@
-- [ ] Add data set, Hive 3.1
+- [ ] Add hadoop-mapreducer
+- [ ] Add Storm
+- [ ] Add Hive
+- [ ] Cassandra

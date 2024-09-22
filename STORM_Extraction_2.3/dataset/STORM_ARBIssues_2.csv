@@ -1,0 +1,773 @@
+Bug_ID,Bug_Summary,Bug_Description
+STORM-3767,NPE on getComponentPendingProfileActions ,"When a topology is newly submitted, if the scheduling loop takes too long, the component UI might have error 500.
+
+This is due to the NPE in nimbus code. An example:
+
+1. When a scheduling loop finishes, nimbus will eventually update the assignmentsBackend. if a topology is newly submitted, its entry will be added to the idToAssignment map, otherwise, the entry will be updated with new assignments. The key point is the new topology Id doesn't exist in idToAssignment before it reaching here.
+
+https://github.com/apache/storm/blob/master/storm-server/src/main/java/org/apache/storm/daemon/nimbus/Nimbus.java#L2548-L2549
+https://github.com/apache/storm/blob/master/storm-client/src/jvm/org/apache/storm/cluster/StormClusterStateImpl.java#L696
+https://github.com/apache/storm/blob/master/storm-client/src/jvm/org/apache/storm/assignments/InMemoryAssignmentBackend.java#L63-L64
+
+2. However, this assignmentsBackend update only started to happen at 2021-04-23 15:30:14.299
+
+
+{code:java}
+2021-04-23 15:30:14.299 o.a.s.d.n.Nimbus timer [INFO] Setting new assignment for topology
+{code}
+
+while this topology topo1-52-1619191499 has been scheduled at 2021-04-23 15:25:13.887. The scheduling loop took longer than 5mins.
+
+
+{code:java}
+2021-04-23 15:25:13.887 o.a.s.s.Cluster timer [INFO] STATUS - topo1-52-1619191499 Running - Fully Scheduled by DefaultResourceAwareStrategy (1297 states traversed in 1275 ms, backtracked 0 times)
+other topologies were taking long time
+
+2021-04-23 15:25:14.378 o.a.s.s.Cluster timer [INFO] STATUS - topo2-76-1612842912 Running - Fully Scheduled by DefaultResourceAwareStrategy (111 states traversed in 34 ms, backtracked 0 times)
+...
+2021-04-23 15:30:14.192 o.a.s.s.Cluster timer [INFO] STATUS - TrendingNowLES-11-1611713968 Not enough resources to schedule after evicting lower priority topologies. Additional Memory Required: 20128.0 MB (Available: 5411178.0 MB). Additional CPU Required: 1010.0% CPU (Available: 3100.0 % CPU).Cannot schedule by DefaultResourceAwareStrategy (65644 states traversed in 299804 ms, backtracked 65555 times, 89 of 150 executors scheduled)
+...
+2021-04-23 15:30:14.216 o.a.s.s.Cluster timer [INFO] STATUS - evaluateplus-dev-47-1605825401 Running - Fully Scheduled by GenericResourceAwareStrategy (41 states traversed in 10 ms, backtracked 0 times)
+{code}
+
+3. During this period, the idToAssignment map in assignmentsBackend wouldn't have the entry for topo1-52-1619191499, so when a component UI was visited,
+
+https://github.com/apache/storm/blob/master/storm-server/src/main/java/org/apache/storm/daemon/nimbus/Nimbus.java#L3613-L3614
+https://github.com/apache/storm/blob/master/storm-server/src/main/java/org/apache/storm/daemon/nimbus/Nimbus.java#L3100
+https://github.com/apache/storm/blob/master/storm-client/src/jvm/org/apache/storm/cluster/StormClusterStateImpl.java#L194
+https://github.com/apache/storm/blob/master/storm-client/src/jvm/org/apache/storm/assignments/InMemoryAssignmentBackend.java#L69
+
+it got a null value as the assignment, and hence NPE.
+
+This can be produced easily by adding some sleep anywhere between 
+
+{code:title=Nimbus.java}
+            Map<String, SchedulerAssignment> newSchedulerAssignments =
+                    computeNewSchedulerAssignments(existingAssignments, topologies, bases, scratchTopoId);
+{code}
+
+and
+{code:title=Nimbus.java}
+ state.setAssignment(topoId, assignment, td.getConf());
+{code}
+
+and submit a new topology and visit its component UI 
+"
+STORM-3765,NPE in DRPCSimpleACLAuthorizer.readAclFromConfig when drpc.authorizer.acl has no values,"When drpc.authorizer.acl has no values, for example:
+
+{code:java}
+-bash-4.2$ cat  drpc-auth-acl.yaml
+drpc.authorizer.acl:
+{code}
+
+DRPCSimpleACLAuthorizer will have NPE
+{code:java}
+2021-04-22 15:22:48.795 o.a.s.t.ProcessFunction pool-9-thread-1 [ERROR] Internal error processing fetchRequest
+java.lang.NullPointerException: null
+        at org.apache.storm.security.auth.authorizer.DRPCSimpleACLAuthorizer.readAclFromConfig(DRPCSimpleACLAuthorizer.java:59) ~[storm-client-2.3.0.y.jar:2.3.0.y]
+        at org.apache.storm.security.auth.authorizer.DRPCSimpleACLAuthorizer.permitClientOrInvocationRequest(DRPCSimpleACLAuthorizer.java:108) ~[storm-client-2.3.0.y.jar:2.3.0.y]
+        at org.apache.storm.security.auth.authorizer.DRPCSimpleACLAuthorizer.permitInvocationRequest(DRPCSimpleACLAuthorizer.java:150) ~[storm-client-2.3.0.y.jar:2.3.0.y]
+        at org.apache.storm.security.auth.authorizer.DRPCAuthorizerBase.permit(DRPCAuthorizerBase.java:51) ~[storm-client-2.3.0.y.jar:2.3.0.y]
+        at org.apache.storm.daemon.drpc.DRPC.checkAuthorization(DRPC.java:130) ~[storm-server-2.3.0.y.jar:2.3.0.y]
+        at org.apache.storm.daemon.drpc.DRPC.checkAuthorizationNoLog(DRPC.java:143) ~[storm-server-2.3.0.y.jar:2.3.0.y]
+        at org.apache.storm.daemon.drpc.DRPC.fetchRequest(DRPC.java:192) ~[storm-server-2.3.0.y.jar:2.3.0.y]
+        at org.apache.storm.daemon.drpc.DRPCThrift.fetchRequest(DRPCThrift.java:42) ~[storm-server-2.3.0.y.jar:2.3.0.y]
+        at org.apache.storm.generated.DistributedRPCInvocations$Processor$fetchRequest.getResult(DistributedRPCInvocations.java:393) ~[storm-client-2.3.0.y.jar:2.3.0.y]
+        at org.apache.storm.generated.DistributedRPCInvocations$Processor$fetchRequest.getResult(DistributedRPCInvocations.java:372) ~[storm-client-2.3.0.y.jar:2.3.0.y]
+        at org.apache.storm.thrift.ProcessFunction.process(ProcessFunction.java:38) [storm-shaded-deps-2.3.0.y.jar:2.3.0.y]
+        at org.apache.storm.thrift.TBaseProcessor.process(TBaseProcessor.java:39) [storm-shaded-deps-2.3.0.y.jar:2.3.0.y]
+        at org.apache.storm.security.auth.sasl.SaslTransportPlugin$TUGIWrapProcessor.process(SaslTransportPlugin.java:152) [storm-client-2.3.0.y.jar:2.3.0.y]
+        at org.apache.storm.thrift.server.TThreadPoolServer$WorkerProcess.run(TThreadPoolServer.java:291) [storm-shaded-deps-2.3.0.y.jar:2.3.0.y]
+        at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1149) [?:1.8.0_262]
+        at java.util.concurrent.ThreadPoolExecutor$Worker.run(Th
+{code}
+"
+STORM-3729,Assigning memory greater and equal than 2048m will make assgin memory for slot values to 1m,"Hi, everyone.
+
+I set my topology over 2048m, the storm ui shows only 65m, so i found its error in [https://github.com/apache/storm/blob/master/storm-client/src/jvm/org/apache/storm/utils/Utils.java]  line 1089 that value cast to int instead of long, It goes wrong if I pass 2048m and results 1m.
+
+Simply change this line to cast Long can solve this problem.:) "
+STORM-3701,Race Condition between cleanup thread and download tasks,"We captured a issue on our supervisor:
+
+{code}
+
+2020-06-09 23:30:08.723 o.a.s.l.LocalizedResource AsyncLocalizer Task Executor - 0 [INFO] completelyRemoveUnusedUser directu for directory /home/y/var/storm/supervisor/usercache/directu
+ 2020-06-09 23:30:08.724 o.a.s.l.AsyncLocalizer AsyncLocalizer Task Executor - 0 [WARN] Caught Exception While Downloading (rethrowing)...
+ java.io.FileNotFoundException: File '/home/y/var/storm/supervisor/stormdist/dg_itp-605-1591745383/stormconf.ser' does not exist
+         at org.apache.storm.shade.org.apache.commons.io.FileUtils.openInputStream(FileUtils.java:297) ~[storm-shaded-deps-2.3.0.y.jar:2.3.0.y]
+         at org.apache.storm.shade.org.apache.commons.io.FileUtils.readFileToByteArray(FileUtils.java:1851) ~[storm-shaded-deps-2.3.0.y.jar:2.3.0.y]
+         at org.apache.storm.utils.ConfigUtils.readSupervisorStormConfGivenPath(ConfigUtils.java:316) ~[storm-client-2.3.0.y.jar:2.3.0.y]
+         at org.apache.storm.utils.ConfigUtils.readSupervisorStormConfImpl(ConfigUtils.java:477) ~[storm-client-2.3.0.y.jar:2.3.0.y]
+         at org.apache.storm.utils.ConfigUtils.readSupervisorStormConf(ConfigUtils.java:311) ~[storm-client-2.3.0.y.jar:2.3.0.y]
+         at org.apache.storm.localizer.AsyncLocalizer$DownloadBlobs.get(AsyncLocalizer.java:698) [storm-server-2.3.0.y.jar:2.3.0.y]
+         at org.apache.storm.localizer.AsyncLocalizer$DownloadBlobs.get(AsyncLocalizer.java:683) [storm-server-2.3.0.y.jar:2.3.0.y]
+         at java.util.concurrent.CompletableFuture$AsyncSupply.run(CompletableFuture.java:1604) [?:1.8.0_242]
+         at java.util.concurrent.Executors$RunnableAdapter.call(Executors.java:511) [?:1.8.0_242]
+         at java.util.concurrent.FutureTask.run(FutureTask.java:266) [?:1.8.0_242]
+         at java.util.concurrent.ScheduledThreadPoolExecutor$ScheduledFutureTask.access$201(ScheduledThreadPoolExecutor.java:180) [?:1.8.0_242]
+         at java.util.concurrent.ScheduledThreadPoolExecutor$ScheduledFutureTask.run(ScheduledThreadPoolExecutor.java:293) [?:1.8.0_242]
+         at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1149) [?:1.8.0_242]
+         at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:624) [?:1.8.0_242]
+         at java.lang.Thread.run(Thread.java:748) [?:1.8.0_242]
+ 2020-06-09 23:30:08.725 o.a.s.d.s.Slot SLOT_6782 [ERROR] java.io.FileNotFoundException: File '/home/y/var/storm/supervisor/stormdist/dg_itp-605-1591745383/stormconf.ser' does not exist
+ 2020-06-09 23:30:08.725 o.a.s.l.AsyncLocalizer SLOT_6782 [INFO] Port and assignment info: PortAndAssignmentImpl\{dg_itp-605-1591745383 on 6782}
+ 2020-06-09 23:30:08.726 o.a.s.l.AsyncLocalizer SLOT_6782 [WARN] Local base blobs have not been downloaded yet.
+ java.io.FileNotFoundException: File '/home/y/var/storm/supervisor/stormdist/dg_itp-605-1591745383/stormconf.ser' does not exist
+         at org.apache.storm.shade.org.apache.commons.io.FileUtils.openInputStream(FileUtils.java:297) ~[storm-shaded-deps-2.3.0.y.jar:2.3.0.y]
+         at org.apache.storm.shade.org.apache.commons.io.FileUtils.readFileToByteArray(FileUtils.java:1851) ~[storm-shaded-deps-2.3.0.y.jar:2.3.0.y]
+         at org.apache.storm.utils.ConfigUtils.readSupervisorStormConfGivenPath(ConfigUtils.java:316) ~[storm-client-2.3.0.y.jar:2.3.0.y]
+         at org.apache.storm.utils.ConfigUtils.readSupervisorStormConfImpl(ConfigUtils.java:477) ~[storm-client-2.3.0.y.jar:2.3.0.y]
+         at org.apache.storm.utils.ConfigUtils.readSupervisorStormConf(ConfigUtils.java:311) ~[storm-client-2.3.0.y.jar:2.3.0.y]
+         at org.apache.storm.localizer.AsyncLocalizer.getLocalResources(AsyncLocalizer.java:362) ~[storm-server-2.3.0.y.jar:2.3.0.y]
+         at org.apache.storm.localizer.AsyncLocalizer.releaseSlotFor(AsyncLocalizer.java:472) [storm-server-2.3.0.y.jar:2.3.0.y]
+         at org.apache.storm.daemon.supervisor.Slot.handleWaitingForBlobLocalization(Slot.java:549) [storm-server-2.3.0.y.jar:2.3.0.y]
+         at org.apache.storm.daemon.supervisor.Slot.stateMachineStep(Slot.java:298) [storm-server-2.3.0.y.jar:2.3.0.y]
+         at org.apache.storm.daemon.supervisor.Slot.run(Slot.java:1039) [storm-server-2.3.0.y.jar:2.3.0.y]
+
+{code}
+ The root issue is the delay at [https://github.com/apache/storm/blob/master/storm-server/src/main/java/org/apache/storm/localizer/AsyncLocalizer.java#L641] which will cause the safeTopologyIds information out-of-date.
+
+ 
+
+ 
+
+ "
+STORM-3658,Problematic worker stays alive because of a deadlock and race condition caused by ShutdownHooks,"During worker startup, it starts many threads including executor threads, and then registers two shutdown hooks, first hook will invoke worker::shutdown, the second hook will sleep for 3 seconds before force halting the whole process.
+
+https://github.com/apache/storm/blob/v2.1.0/storm-client/src/jvm/org/apache/storm/daemon/worker/Worker.java#L141-L147
+
+https://github.com/apache/storm/blob/v2.1.0/storm-client/src/jvm/org/apache/storm/executor/Executor.java#L253-L255
+
+We have seen a case where a deadlock happened. Imaging there is a bolt in a topology consistently fails at prepare stage and throws RuntimeException. This thread will eventually invoke Runtime.getRuntime().exit. The code path is:
+
+https://github.com/apache/storm/blob/v2.1.0/storm-client/src/jvm/org/apache/storm/utils/Utils.java#L406-L407
+
+https://github.com/apache/storm/blob/v2.1.0/storm-client/src/jvm/org/apache/storm/executor/error/ReportErrorAndDie.java#L41
+
+https://github.com/apache/storm/blob/v2.1.0/storm-client/src/jvm/org/apache/storm/utils/Utils.java#L510-L514
+
+There are three scenarios here.
+
+*Scenario 1*
+If two shutdown hooks are registered before this bolt's prepare method is invoked, when this bolt throws RuntimeException, it eventually invokes Runtime.getRuntime().exit, which triggers two shutdown hooks to start. And then this bolt executor thread waits for these two shutdown hooks to finish.
+
+https://github.com/AdoptOpenJDK/openjdk-jdk8u/blob/jdk8u242-b08/jdk/src/share/classes/java/lang/ApplicationShutdownHooks.java#L104-L111 (we use this openJDK8u242 version)
+
+However, what the first shutdown hooks does is to invoke worker::shutdown method
+https://github.com/apache/storm/blob/v2.1.0/storm-client/src/jvm/org/apache/storm/daemon/worker/Worker.java#L467-L469
+which will interrupt all executor threads and then wait for them to finish 
+
+https://github.com/apache/storm/blob/v2.1.0/storm-client/src/jvm/org/apache/storm/executor/ExecutorShutdown.java#L95-L100
+
+However, this bolt executor thread ignores InterruptedException and continues to wait for the first hook to finish. Hence there is a dead lock between the first shutdown hook and the bolt executor thread. After 3 seconds, the second shutdown hook force halting the worker process. So in the log, you will see ""Forcing Halt...""
+
+*Scenario 2*
+If the bolt executor thread invokes prepare method earlier than the main thread registers these two shutdown hooks, because the bolt executor thread already triggers shutdown, the main thread will receive an IllegalStateException(""Shutdown in progress"")
+
+{code:java}
+2020-06-18 11:57:29.159 o.a.s.u.Utils main [ERROR] Received error in thread main.. terminating server...
+java.lang.Error: java.lang.IllegalStateException: Shutdown in progress
+{code}
+
+https://github.com/apache/storm/blob/v2.1.0/storm-client/src/jvm/org/apache/storm/utils/Utils.java#L1011-L1018
+
+https://github.com/AdoptOpenJDK/openjdk-jdk8u/blob/jdk8u242-b08/jdk/src/share/classes/java/lang/ApplicationShutdownHooks.java#L63-L67
+
+Since there is no shutdown hook registered, Runtime.getRuntime.exit invoked by the bolt executor continues; in the meantime, the main thread also invokes Runtime.getRuntime.exit because of IllegalStateException. Eventually the process dies.
+
+*Scenario 3*
+This is the worse case. In this scenario, after the first shutdown hook is registered, and before the second hook is registered, the bolt executor thread invokes prepare method and throws a RuntimeException. 
+https://github.com/apache/storm/blob/v2.1.0/storm-client/src/jvm/org/apache/storm/utils/Utils.java#L355-L356
+ 
+In this case, we know have the deadlock between the first shutdown hook and the bolt executor thread (like in scenario 1). The main thread will also have IllegalStateException when it tries to register the second shutdown hook, so main thread also invokes Runtime.getRuntime.exit (like in scenario 2). But this time, since the bolt executor thread already obtained the shutdown lock (because it invokes Runtime.getRuntime.exit earlier), 
+https://github.com/AdoptOpenJDK/openjdk-jdk8u/blob/jdk8u242-b08/jdk/src/share/classes/java/lang/Shutdown.java#L208-L214
+
+the main thread has to wait for the bolt executor thread to release this Shutdown.class lock. However, there is a deadlock between bolt executor thread and the first shutdown hook(thread), the main thread, the bolt executor thread and the shutdown hook are all BLOCKED. 
+
+And in this case, since the second shutdown hook (sleepKill) is not registered, and every other threads like heartbeat timers still work (not yet closed), no one (not worker itself, not nimbus or supervisor) will kill this worker. 
+
+So this worker stays alive but it does not function. And since this executor bolt is blocked, it doesn't consume tuples from the receiveQ, so the receiveQ can be quickly fill up by upstreams, the credential refresh thread is also blocked because it won't give up until the credential tuple is published to the receiveQ.
+
+https://github.com/apache/storm/blob/v2.1.0/storm-client/src/jvm/org/apache/storm/executor/ExecutorShutdown.java#L68-L69
+
+https://github.com/apache/storm/blob/v2.1.0/storm-client/src/jvm/org/apache/storm/utils/JCQueue.java#L300-L313
+
+*How to produce the deadlock*
+It can be produced by modifying the [WordCountTopology|https://github.com/apache/storm/blob/v2.1.0/examples/storm-starter/src/jvm/org/apache/storm/starter/WordCountTopology.java] to add 
+
+{code:java}
+@Override
+    public void prepare(Map<String, Object> topoConf, TopologyContext context) {
+        throw new RuntimeException(""Runtime exception at WordCountBolt prepare"");
+    }
+{code}
+
+in the WordCount bolt so everytime the prepare method is called, this bolt throws a RuntimeException. 
+
+
+Optionally, add a delay in between registering two shutdown hooks can help reproduce scenario 3.
+
+{code:java}
+Runtime.getRuntime().addShutdownHook(wrappedFunc);
+        try {
+            Thread.sleep(100);
+        } catch (InterruptedException e) {
+            LOG.info(""Sleep for 100ms between hooks"", e);
+        }
+        LOG.info(""Wait for 100ms"");
+        Runtime.getRuntime().addShutdownHook(sleepKill);
+{code}
+
+
+*Solution*
+There are better ways to deal with this issue. But a simple way is to register shutdown hooks before any executor threads are started to avoid IllegalStateException; And in 
+https://github.com/apache/storm/blob/v2.1.0/storm-client/src/jvm/org/apache/storm/executor/ExecutorShutdown.java#L98-L101
+change it be a timed join so it won't wait indefinitely. This can prevent the deadlock from happening. 
+
+
+"
+STORM-3649,Logic error regarding storm.supervisor.medium.memory.grace.period.ms,"Inside this chunk of code
+
+https://github.com/apache/storm/blob/2.2.x-branch/storm-server/src/main/java/org/apache/storm/daemon/supervisor/BasicContainer.java#L758
+
+{code:java}
+if (systemFreeMemoryMb < mediumMemoryThresholdMb) {
+                    if (memoryLimitExceededStart < 0) {
+                        memoryLimitExceededStart = Time.currentTimeMillis();
+                    } else {
+                        long timeInViolation = Time.currentTimeMillis() - memoryLimitExceededStart;
+                        if (timeInViolation > mediumMemoryGracePeriodMs) {
+                            LOG.warn(
+                                ""{} is using {} MB > memory limit {} MB for {} seconds"",
+                                typeOfCheck,
+                                usageMb,
+                                memoryLimitMb,
+                                timeInViolation / 1000);
+                            return true;
+                        }
+                    }
+                } 
+{code}
+
+At very beginning, memoryLimitExceededStart in BasicContainer is initialized as 0. :
+https://github.com/apache/storm/blob/2.2.x-branch/storm-server/src/main/java/org/apache/storm/daemon/supervisor/BasicContainer.java#L80
+{code:java}
+protected volatile long memoryLimitExceededStart;
+{code}
+
+So once it hits this scenario, the grace period doesn't really take any effect because the timeInViolation will be very large (equals to currentTime)
+
+The logs from a test:
+
+{code:java}
+2020-06-08 20:39:18.277 o.a.s.d.s.BasicContainer SLOT_6707 [WARN] WORKER 9c16e81e-4936-4029-bcda-ceb5b74b8f42 is using 167 MB > memory limit 158 MB for 1591648758 seconds
+{code}
+
+"
+STORM-3637,Looping topology structure can cause backpressure to deadlock,"When you have a topology structure with loops in it (BoltA and BoltB send tuples to each other), it can cause backpressure to deadlock.
+
+The scenario is that BoltA suddenly takes a long time to process a tuple (in our situation, it's doing a database operation). This causes the task input queue to fill up, setting the backpressure flag.
+
+BoltB, which is sending a tuple to BoltA, then cannot send, and the tuple is held in the emit queue. This blocks any tuples behind it, and also stops BoltB from executing. This means the input queue to BoltB will build up, until that backpressure flag is also set - and then when BoltA next wants to send a tuple to BoltB, it will irrevocably deadlock."
+STORM-3624,Race condition on ArtifactoryConfigLoader.load,"https://github.com/apache/storm/blob/master/storm-server/src/main/java/org/apache/storm/scheduler/resource/ResourceAwareScheduler.java#L100-L102
+
+config() is called in multiple threads. But ArtifactoryConfigLoader.load is not thread-safe. For example, https://github.com/apache/storm/blob/master/storm-server/src/main/java/org/apache/storm/scheduler/utils/ArtifactoryConfigLoader.java#L181-L187
+{code:java}
+JSONObject returnValue;
+        try {
+            returnValue = (JSONObject) jsonParser.parse(metadataStr);
+        } catch (ParseException e) {
+            LOG.error(""Could not parse JSON string {}"", metadataStr, e);
+            return null;
+        }
+{code}
+
+Multiple threads use the same jsonParser and since JsonParser is not thread-safe, the return value will be corrupted. 
+
+
+I propose to create a separate thread to load scheduler configs periodically. This also makes the config loading logic cleaner."
+STORM-3587,Allow Scheduler futureTask to gracefully exit and register message on timeout,"ResourceAwareScheduler creates a FutureTask with timeout specified in DaemonConfig.
+
+ConstraintSolverStrategy uses the the another configuration variable to determine when to terminate its effort. Limit this value so that it terminates at most slightly before TimeoutException. This graceful exit allows result (and its error) to be available in ResourceAwareScheduler.
+
+ "
+STORM-3519,Change ConstraintSolverStrategy::backtrackSearch to avoid StackOverflowException,"When ConstraintSolverStrategy::backtrackSearch recursively call itself - after approximately 20000 calls, there is a StackOverflowException. This can be replicated by running TestConstraintSolverStrategy::testScheduleLargeExecutorConstraintCount."
+STORM-3472,"STORM-3411 should have tests, and we shouldn't catch NPE for control flow","I think the code merged in STORM-3411 should have added tests that the new functionality works.
+
+We should get rid of the new bit of code that try-catches an NPE to check whether the downloaded file is inside a worker dir. Instead, we should move the name generation up the call hierarchy to a place where we can tell whether we're inside a worker dir or not."
+STORM-3379,Intermittent NPE during worker boot in local mode,"{quote}
+java.io.IOException: java.lang.NullPointerException
+	at org.apache.storm.daemon.supervisor.LocalContainer.launch(LocalContainer.java:57) ~[storm-server-2.0.1-SNAPSHOT.jar:2.0.1-SNAPSHOT]
+	at org.apache.storm.daemon.supervisor.LocalContainerLauncher.launchContainer(LocalContainerLauncher.java:49) ~[storm-server-2.0.1-SNAPSHOT.jar:2.0.1-SNAPSHOT]
+	at org.apache.storm.daemon.supervisor.Slot.handleWaitingForBlobUpdate(Slot.java:536) ~[storm-server-2.0.1-SNAPSHOT.jar:2.0.1-SNAPSHOT]
+	at org.apache.storm.daemon.supervisor.Slot.stateMachineStep(Slot.java:230) ~[storm-server-2.0.1-SNAPSHOT.jar:2.0.1-SNAPSHOT]
+	at org.apache.storm.daemon.supervisor.Slot.run(Slot.java:931) [storm-server-2.0.1-SNAPSHOT.jar:2.0.1-SNAPSHOT]
+Caused by: java.lang.NullPointerException
+	at org.apache.storm.daemon.worker.WorkerState.readWorkerExecutors(WorkerState.java:623) ~[storm-client-2.0.1-SNAPSHOT.jar:2.0.1-SNAPSHOT]
+	at org.apache.storm.daemon.worker.WorkerState.<init>(WorkerState.java:156) ~[storm-client-2.0.1-SNAPSHOT.jar:2.0.1-SNAPSHOT]
+	at org.apache.storm.daemon.worker.Worker.loadWorker(Worker.java:174) ~[storm-client-2.0.1-SNAPSHOT.jar:2.0.1-SNAPSHOT]
+	at org.apache.storm.daemon.worker.Worker.lambda$start$0(Worker.java:166) ~[storm-client-2.0.1-SNAPSHOT.jar:2.0.1-SNAPSHOT]
+	at java.security.AccessController.doPrivileged(Native Method) ~[?:1.8.0_201]
+	at javax.security.auth.Subject.doAs(Subject.java:422) ~[?:1.8.0_201]
+	at org.apache.storm.daemon.worker.Worker.start(Worker.java:165) ~[storm-client-2.0.1-SNAPSHOT.jar:2.0.1-SNAPSHOT]
+	at org.apache.storm.daemon.supervisor.LocalContainer.launch(LocalContainer.java:55) ~[storm-server-2.0.1-SNAPSHOT.jar:2.0.1-SNAPSHOT]
+	... 4 more
+{quote}
+
+The issue is that the WorkerState tries to read executor assignment from ZK, and gets null back. "
+STORM-3372,HDFS bolt can throw NPE on shutdown if not using a TimedRotationPolicy,"{quote}42612 [SLOT_1024] ERROR o.a.s.d.s.Slot - Error when processing event
+java.lang.NullPointerException: null
+    at org.apache.storm.hdfs.bolt.AbstractHdfsBolt.cleanup(AbstractHdfsBolt.java:261) ~[f083f1dc515311e9868bcf07babd3298.jar:?]
+    at sun.reflect.NativeMethodAccessorImpl.invoke0(Native Method) ~[?:1.8.0_112]
+    at sun.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62) ~[?:1.8.0_112]
+    at sun.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43) ~[?:1.8.0_112]
+    at java.lang.reflect.Method.invoke(Method.java:498) ~[?:1.8.0_112]
+    at clojure.lang.Reflector.invokeMatchingMethod(Reflector.java:93) ~[clojure-1.7.0.jar:?]
+    at clojure.lang.Reflector.invokeNoArgInstanceMember(Reflector.java:313) ~[clojure-1.7.0.jar:?]
+    at org.apache.storm.daemon.executor$fn__9739.invoke(executor.clj:878) ~[storm-core-1.2.1.3.1.0.0-78.jar:1.2.1.3.1.0.0-78]
+    at clojure.lang.MultiFn.invoke(MultiFn.java:233) ~[clojure-1.7.0.jar:?]
+    at org.apache.storm.daemon.executor$mk_executor$reify__9530.shutdown(executor.clj:437) ~[storm-core-1.2.1.3.1.0.0-78.jar:1.2.1.3.1.0.0-78]
+    at sun.reflect.NativeMethodAccessorImpl.invoke0(Native Method) ~[?:1.8.0_112]
+    at sun.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62) ~[?:1.8.0_112]
+    at sun.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43) ~[?:1.8.0_112]
+    at java.lang.reflect.Method.invoke(Method.java:498) ~[?:1.8.0_112]
+    at clojure.lang.Reflector.invokeMatchingMethod(Reflector.java:93) ~[clojure-1.7.0.jar:?]
+    at clojure.lang.Reflector.invokeNoArgInstanceMember(Reflector.java:313) ~[clojure-1.7.0.jar:?]
+    at org.apache.storm.daemon.worker$fn__10165$exec_fn__1369__auto__$reify__10167$shutdown_STAR___10187.invoke(worker.clj:684) ~[storm-core-1.2.1.3.1.0.0-78.jar:1.2.1.3.1.0.0-78]
+    at org.apache.storm.daemon.worker$fn__10165$exec_fn__1369__auto__$reify$reify__10213.shutdown(worker.clj:724) ~[storm-core-1.2.1.3.1.0.0-78.jar:1.2.1.3.1.0.0-78]
+    at org.apache.storm.ProcessSimulator.killProcess(ProcessSimulator.java:67) ~[storm-core-1.2.1.3.1.0.0-78.jar:1.2.1.3.1.0.0-78]
+    at org.apache.storm.daemon.supervisor.LocalContainer.kill(LocalContainer.java:69) ~[storm-core-1.2.1.3.1.0.0-78.jar:1.2.1.3.1.0.0-78]
+    at org.apache.storm.daemon.supervisor.Slot.killContainerForChangedAssignment(Slot.java:311) ~[storm-core-1.2.1.3.1.0.0-78.jar:1.2.1.3.1.0.0-78]
+    at org.apache.storm.daemon.supervisor.Slot.handleRunning(Slot.java:527) ~[storm-core-1.2.1.3.1.0.0-78.jar:1.2.1.3.1.0.0-78]
+    at org.apache.storm.daemon.supervisor.Slot.stateMachineStep(Slot.java:265) ~[storm-core-1.2.1.3.1.0.0-78.jar:1.2.1.3.1.0.0-78]
+    at org.apache.storm.daemon.supervisor.Slot.run(Slot.java:752) [storm-core-1.2.1.3.1.0.0-78.jar:1.2.1.3.1.0.0-78]{quote}
+The error is due to a bug in storm-hdfs.
+
+That variable in https://github.com/apache/storm/blob/v1.2.1/external/storm-hdfs/src/main/java/org/apache/storm/hdfs/bolt/AbstractHdfsBolt.java#L261 is only initialized if the rotation policy is a TimedRotationPolicy, which yours isn't."
+STORM-3300,Potential NPE in Acker when using reset timeout,
+STORM-3230,Small race with worker tokens.,There is a small race in zookeeper I missed when trying to get the secret out of ZK for worker tokens.
+STORM-3223,RAS can get an NPE if entire rack is blacklisted,If an entire rack is blacklisted the RAS scheduler can end up getting an NPE.  This is a more extreme version of a fix that was merged in previously for single nodes that are blacklisted causing NPEs.
+STORM-3211,WindowedBoltExecutor NPE if wrapped bolt returns null from getComponentConfiguration,"{code}
+Exception in thread ""main"" java.lang.NullPointerException
+    at org.apache.storm.topology.WindowedBoltExecutor.declareOutputFields(WindowedBoltExecutor.java:309)
+    at org.apache.storm.topology.TopologyBuilder.getComponentCommon(TopologyBuilder.java:432)
+    at org.apache.storm.topology.TopologyBuilder.createTopology(TopologyBuilder.java:120)
+    at Main.main(Main.java:23)
+{code}"
+STORM-3208,supervisor NPE trying to kill workers,"{code:java}
+2018-08-29 15:37:47.891 o.a.s.u.Utils main [INFO] UNNAMED:main : user is gstorm
+2018-08-29 15:37:47.893 o.a.s.d.s.Supervisor main [ERROR] Error trying to kill 7f4dd1bb-ea77-4f13-a785-0299e81bf5a5
+java.lang.NullPointerException: null
+        at org.apache.storm.daemon.supervisor.BasicContainer.cleanUpForRestart(BasicContainer.java:216) ~[storm-server-2.0.0.y.jar:2.0.0.y]
+        at org.apache.storm.daemon.supervisor.Container.cleanUp(Container.java:360) ~[storm-server-2.0.0.y.jar:2.0.0.y]
+        at org.apache.storm.daemon.supervisor.Supervisor.killWorkers(Supervisor.java:482) [storm-server-2.0.0.y.jar:2.0.0.y]
+        at org.apache.storm.daemon.supervisor.ReadClusterState.<init>(ReadClusterState.java:111) [storm-server-2.0.0.y.jar:2.0.0.y]
+        at org.apache.storm.daemon.supervisor.Supervisor.launch(Supervisor.java:282) [storm-server-2.0.0.y.jar:2.0.0.y]
+        at org.apache.storm.daemon.supervisor.Supervisor.launchDaemon(Supervisor.java:312) [storm-server-2.0.0.y.jar:2.0.0.y]
+        at org.apache.storm.daemon.supervisor.Supervisor.main(Supervisor.java:185) [storm-server-2.0.0.y.jar:2.0.0.y]
+2018-08-29 15:37:47.904 o.a.s.d.s.Supervisor main [INFO] Starting supervisor with id 03ee87f5-28ca-491b-95cb-15b841f249e1-10.215.76.240 at host openqe74blue-n1.blue.ygrid.yahoo.com.
+
+{code}"
+STORM-3173,flush metrics to ScheduledReporter on shutdown,"We lose shutdown related metrics that we should alert on at shutdown. We should flush metrics on a shutdown.
+
+https://github.com/apache/storm/blob/master/storm-server/src/main/java/org/apache/storm/daemon/nimbus/Nimbus.java#L4497"
+STORM-3162,Race condition at updateHeartbeatCache,"This is discovered during testing for STORM-3133. Travis-CI log can be found [here|https://travis-ci.org/apache/storm/jobs/408719153#L1897].
+
+Specifically, updateHeartbeatCache can be invoked both by Nimbus (at `Nimbus#updateHeartBeats`) and by Supervisor (at `Nimbubs#updateCachedHeartbeatsFromWorker` at `Nimbus#updateCachedHeartbeatsFromSupervisor`), causing ConcurrentModificationException."
+STORM-3159,Fixed potential file resource leak,"`zipFileSize()` in ServerUtils is not correctly wrapped in try-with-resource block, which could lead to resource leak."
+STORM-3141,NPE in WorkerState.transferLocalBatch when receiving messages for a task that isn't the first task assigned to the executor,"{code}
+2018-07-02 20:32:28.944 [Worker-Transfer] ERROR org.apache.storm.utils.Utils - Async loop died!
+java.lang.NullPointerException: null
+	at org.apache.storm.daemon.worker.WorkerState.transferLocalBatch(WorkerState.java:538) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.storm.messaging.DeserializingConnectionCallback.recv(DeserializingConnectionCallback.java:71) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.storm.messaging.local.Context$LocalClient.send(Context.java:194) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.storm.utils.TransferDrainer.send(TransferDrainer.java:53) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.storm.daemon.worker.WorkerTransfer.flush(WorkerTransfer.java:100) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.storm.utils.JCQueue.consumeImpl(JCQueue.java:146) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.storm.utils.JCQueue.consume(JCQueue.java:110) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.storm.utils.JCQueue.consume(JCQueue.java:101) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.storm.daemon.worker.WorkerTransfer.lambda$makeTransferThread$0(WorkerTransfer.java:82) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.storm.utils.Utils$2.run(Utils.java:353) [storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at java.lang.Thread.run(Thread.java:748) [?:1.8.0_144]
+2018-07-02 20:32:28.945 [Worker-Transfer] ERROR org.apache.storm.utils.Utils - Async loop died!
+java.lang.RuntimeException: java.lang.NullPointerException
+	at org.apache.storm.utils.Utils$2.run(Utils.java:368) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at java.lang.Thread.run(Thread.java:748) [?:1.8.0_144]
+Caused by: java.lang.NullPointerException
+	at org.apache.storm.daemon.worker.WorkerState.transferLocalBatch(WorkerState.java:538) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.storm.messaging.DeserializingConnectionCallback.recv(DeserializingConnectionCallback.java:71) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.storm.messaging.local.Context$LocalClient.send(Context.java:194) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.storm.utils.TransferDrainer.send(TransferDrainer.java:53) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.storm.daemon.worker.WorkerTransfer.flush(WorkerTransfer.java:100) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.storm.utils.JCQueue.consumeImpl(JCQueue.java:146) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.storm.utils.JCQueue.consume(JCQueue.java:110) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.storm.utils.JCQueue.consume(JCQueue.java:101) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.storm.daemon.worker.WorkerTransfer.lambda$makeTransferThread$0(WorkerTransfer.java:82) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.storm.utils.Utils$2.run(Utils.java:353) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	... 1 more
+{code}
+
+When tuples are received, the method looks up which JCQueue to send to. It does this with the tuple destination task id. The map it looks in only has the queues by the starting task id of the executor's range, so if the destination is e.g. task 4 for an executor with assignment [3, 4], we hit an NPE."
+STORM-3127,Avoid potential race condition ,"PortAndAssignment and its call back is added after update to a blob is invoked asynchronously. It is not guaranteed that the new dependent worker will be registered before blob informs its update to listening workers. 
+
+This can be fixed by moving addReference call up."
+STORM-3122,"FNFE due to race condition between ""async localizer"" and ""update blob"" timer thread","There's race condition between ""async localizer"" and ""update blob"" timer thread.
+
+When worker is shutting down, reference count for blob will be 0 and supervisor will remove actual blob file. There's also ""update blob"" timer thread which tries to keep blobs updated for downloaded topologies. While updating topology it should read some of blob files already downloaded assuming these files should be downloaded before, and the assumption is broken because of async localizer.
+
+[~arunmahadevan] suggested an approach to fix this: ""updateBlobsForTopology"" can just catch the FIleNotFoundException and skip updating the blobs in case it can't find the stormconf, and the approach looks simplest fix so I'll provide a patch based on suggestion.
+
+Btw, it doesn't apply to master branch, since in master branch all blobs are synced up separately (no need to read stormconf to enumerate topology related blobs), and update logic is already fault-tolerance (skip to next sync when it can't pull the blob)."
+STORM-3084,2.x NPE on Nimbus startup,"{code:java}
+2018-05-24 09:27:05.636 o.a.s.d.n.Nimbus main [INFO] Starting nimbus server for storm version '2.0.0.y' 2018-05-24 09:27:06.012 o.a.s.d.n.Nimbus timer [ERROR] Error while processing event java.lang.RuntimeException: java.lang.NullPointerException at org.apache.storm.daemon.nimbus.Nimbus.lambda$launchServer$37(Nimbus.java:2685) ~[storm-server-2.0.0.y.jar:2.0.0.y] at org.apache.storm.StormTimer$1.run(StormTimer.java:111) ~[storm-client-2.0.0.y.jar:2.0.0.y] at org.apache.storm.StormTimer$StormTimerTask.run(StormTimer.java:227) ~[storm-client-2.0.0.y.jar:2.0.0.y] Caused by: java.lang.NullPointerException at org.apache.storm.daemon.nimbus.Nimbus.readAllSupervisorDetails(Nimbus.java:1814) ~[storm-server-2.0.0.y.jar:2.0.0.y] at org.apache.storm.daemon.nimbus.Nimbus.computeNewSchedulerAssignments(Nimbus.java:1906) ~[storm-server-2.0.0.y.jar:2.0.0.y] at org.apache.storm.daemon.nimbus.Nimbus.mkAssignments(Nimbus.java:2057) ~[storm-server-2.0.0.y.jar:2.0.0.y] at org.apache.storm.daemon.nimbus.Nimbus.mkAssignments(Nimbus.java:2003) ~[storm-server-2.0.0.y.jar:2.0.0.y] at org.apache.storm.daemon.nimbus.Nimbus.lambda$launchServer$37(Nimbus.java:2681) ~[storm-server-2.0.0.y.jar:2.0.0.y] ... 2 more 2018-05-24 09:27:06.023 o.a.s.u.Utils timer [ERROR] Halting process: Error while processing event java.lang.RuntimeException: Halting process: Error while processing event at org.apache.storm.utils.Utils.exitProcess(Utils.java:469) ~[storm-client-2.0.0.y.jar:2.0.0.y] at org.apache.storm.daemon.nimbus.Nimbus.lambda$new$17(Nimbus.java:484) ~[storm-server-2.0.0.y.jar:2.0.0.y] at org.apache.storm.StormTimer$StormTimerTask.run(StormTimer.java:252) ~[storm-client-2.0.0.y.jar:2.0.0.y] 2018-05-24 09:27:06.032 o.a.s.d.n.Nimbus Thread-12 [INFO] Shutting down master 2018-05-24 09:27:06.032 o.a.s.u.Utils Thread-13 [INFO] Halting after 5 seconds
+{code}"
+STORM-3075,NPE starting nimbus,"{code:java}
+2018-05-15 14:14:59.873 o.a.c.f.l.ListenerContainer main-EventThread [ERROR] Listener (org.apache.storm.zookeeper.Zookeeper$1@26d820eb) threw an exception
+java.lang.NullPointerException: null
+        at org.apache.storm.nimbus.LeaderListenerCallback.leaderCallBack(LeaderListenerCallback.java:118) ~[storm-server-2.0.0.y.jar:2.0.0.y]
+        at org.apache.storm.zookeeper.Zookeeper$1.isLeader(Zookeeper.java:124) ~[storm-server-2.0.0.y.jar:2.0.0.y]
+        at org.apache.curator.framework.recipes.leader.LeaderLatch$9.apply(LeaderLatch.java:665) ~[curator-recipes-4.0.1.jar:4.0.1]
+        at org.apache.curator.framework.recipes.leader.LeaderLatch$9.apply(LeaderLatch.java:661) ~[curator-recipes-4.0.1.jar:4.0.1]
+        at org.apache.curator.framework.listen.ListenerContainer$1.run(ListenerContainer.java:93) ~[curator-framework-4.0.1.jar:4.0.1]
+        at org.apache.curator.shaded.com.google.common.util.concurrent.MoreExecutors$DirectExecutor.execute(MoreExecutors.java:435) ~[curator-client-4.0.1.jar:?]
+        at org.apache.curator.framework.listen.ListenerContainer.forEach(ListenerContainer.java:85) ~[curator-framework-4.0.1.jar:4.0.1]
+        at org.apache.curator.framework.recipes.leader.LeaderLatch.setLeadership(LeaderLatch.java:660) ~[curator-recipes-4.0.1.jar:4.0.1]
+        at org.apache.curator.framework.recipes.leader.LeaderLatch.checkLeadership(LeaderLatch.java:539) ~[curator-recipes-4.0.1.jar:4.0.1]
+        at org.apache.curator.framework.recipes.leader.LeaderLatch.access$700(LeaderLatch.java:65) ~[curator-recipes-4.0.1.jar:4.0.1]
+        at org.apache.curator.framework.recipes.leader.LeaderLatch$7.processResult(LeaderLatch.java:590) ~[curator-recipes-4.0.1.jar:4.0.1]
+        at org.apache.curator.framework.imps.CuratorFrameworkImpl.sendToBackgroundCallback(CuratorFrameworkImpl.java:865) ~[curator-framework-4.0.1.jar:4.0.1]
+        at org.apache.curator.framework.imps.CuratorFrameworkImpl.processBackgroundOperation(CuratorFrameworkImpl.java:635) ~[curator-framework-4.0.1.jar:4.0.1]
+        at org.apache.curator.framework.imps.WatcherRemovalFacade.processBackgroundOperation(WatcherRemovalFacade.java:152) ~[curator-framework-4.0.1.jar:4.0.1]
+        at org.apache.curator.framework.imps.GetChildrenBuilderImpl$2.processResult(GetChildrenBuilderImpl.java:187) ~[curator-framework-4.0.1.jar:4.0.1]
+        at org.apache.zookeeper.ClientCnxn$EventThread.processEvent(ClientCnxn.java:590) ~[zookeeper-3.4.6.jar:3.4.6-1569965]
+        at org.apache.zookeeper.ClientCnxn$EventThread.run(ClientCnxn.java:498) ~[zookeeper-3.4.6.jar:3.4.6-1569965]
+
+{code}"
+STORM-3059,KafkaSpout throws NPE when hitting a null tuple if the processing guarantee is not AT_LEAST_ONCE,"Introduced with STORM-2994
+
+{quote}
+java.lang.NullPointerException: null
+        at org.apache.storm.kafka.spout.KafkaSpout.emitOrRetryTuple(KafkaSpout.java:507)
+~[stormjar.jar:?]
+        at org.apache.storm.kafka.spout.KafkaSpout.emitIfWaitingNotEmitted(KafkaSpout.java:440)
+~[stormjar.jar:?]
+        at org.apache.storm.kafka.spout.KafkaSpout.nextTuple(KafkaSpout.java:308)
+~[stormjar.jar:?]
+{quote}"
+STORM-3020,Fix race condition is async localizer,"I think this impacts all of the code that uses asynclocalizer, but I need to check to be sure.
+
+As part of a review of a different pull request against AsyncLocalizer I noticed that requestDownloadTopologyBlobs is synchronized, but everything it does is async, but there is a race in one of the async pieces where we read from a map, and then try to update the map later, all outside of a lock."
+STORM-2900,Subject is not populated and NPE is thrown while populating credentials in nimbus.,"Nimbus Auto Creds[1.x, 2.0] may get into NPE while populating credentials when there is no config for the given key.
+
+1.x - [https://github.com/apache/storm/blob/1.x-branch/external/storm-autocreds/src/main/java/org/apache/storm/common/AbstractAutoCreds.java#L75]
+ 2.0 - [https://github.com/apache/storm/blob/master/external/storm-autocreds/src/main/java/org/apache/storm/common/AbstractHadoopNimbusPluginAutoCreds.java#L55]"
+STORM-2876,Some storm-hdfs tests fail with out of memory periodically,"In our 2.x automated testing we have noticed that every so often we will see TestFileLock fail with out of memory errors.
+
+{code}
+java.lang.OutOfMemoryError: Java heap space
+...
+{code}
+
+Which then appears to trigger other failures.  Not sure if there is a memory leak involved or if the tests really need 1.5GB of memory periodically."
+STORM-2870,FileBasedEventLogger leaks non-daemon ExecutorService which prevents process to be finished,"{code}
+    private void setUpFlushTask() {
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        Runnable task = new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if(dirty) {
+                        eventLogWriter.flush();
+                        dirty = false;
+                    }
+                } catch (IOException ex) {
+                    LOG.error(""Error flushing "" + eventLogPath, ex);
+                    throw new RuntimeException(ex);
+                }
+            }
+        };
+
+        scheduler.scheduleAtFixedRate(task, FLUSH_INTERVAL_MILLIS, FLUSH_INTERVAL_MILLIS, TimeUnit.MILLISECONDS);
+}
+{code}
+
+The code block initializes ExecutorService locally, which served threads are not daemons so it can prevent JVM to be exit successfully.
+
+Moreover it should be considered as bad case: not labeling thread name. I observed the process hung and got jstack, but hard to know where is the root, because leaked thread has default thread name."
+STORM-2811,"Nimbus may throw NPE if the same topology is killed multiple times, and the integration test kills the same topology multiple times","{quote}
+2017-11-12 08:45:50.353 o.a.s.d.n.Nimbus pool-14-thread-47 [WARN] Kill topology exception. (topology name='SlidingWindowTest-window20-slide10')
+java.lang.NullPointerException: null
+	at org.apache.storm.cluster.IStormClusterState.getTopoId(IStormClusterState.java:171) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.storm.daemon.nimbus.Nimbus.tryReadTopoConfFromName(Nimbus.java:1970) ~[storm-server-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.storm.daemon.nimbus.Nimbus.killTopologyWithOpts(Nimbus.java:2760) ~[storm-server-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.storm.generated.Nimbus$Processor$killTopologyWithOpts.getResult(Nimbus.java:3226) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.storm.generated.Nimbus$Processor$killTopologyWithOpts.getResult(Nimbus.java:3210) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.thrift.ProcessFunction.process(ProcessFunction.java:39) ~[libthrift-0.10.0.jar:0.10.0]
+	at org.apache.thrift.TBaseProcessor.process(TBaseProcessor.java:39) ~[libthrift-0.10.0.jar:0.10.0]
+	at org.apache.storm.security.auth.SimpleTransportPlugin$SimpleWrapProcessor.process(SimpleTransportPlugin.java:167) ~[storm-client-2.0.0-SNAPSHOT.jar:2.0.0-SNAPSHOT]
+	at org.apache.thrift.server.AbstractNonblockingServer$FrameBuffer.invoke(AbstractNonblockingServer.java:518) ~[libthrift-0.10.0.jar:0.10.0]
+	at org.apache.thrift.server.Invocation.run(Invocation.java:18) ~[libthrift-0.10.0.jar:0.10.0]
+	at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1149) [?:1.8.0_144]
+	at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:624) [?:1.8.0_144]
+	at java.lang.Thread.run(Thread.java:748) [?:1.8.0_144]
+{quote}"
+STORM-2810,Storm-hdfs tests are leaking resources,"The Storm-hdfs tests are leaking resources, and it seems to be making the tests fail. "
+STORM-2795,Race in downloading resources can cause failure,Recently had a failure/hang in the async localizer test.  Turns out that there is a race when downloading dependencies and there is a race in trying to create the parent directory.
+STORM-2786,Ackers leak tracking info on failure and lots of other cases.,"Over the weekend we had an incident where ackers were running out of memory at a really scary rate.  It turns out that they were having a lot of failures, for an unrelated reason, but each of the failures were resulting in tuple tracking being lost because... 
+
+We don't send ticks to any system components ever...
+
+https://github.com/apache/storm/blob/124acb92dff04a57b530ab4d95a698abc8ff46d9/storm-client/src/jvm/org/apache/storm/executor/Executor.java#L384
+
+and ackers are system components.
+
+So the tracking map was never rotated and all failed tuples
+
+https://github.com/apache/storm/blob/124acb92dff04a57b530ab4d95a698abc8ff46d9/storm-client/src/jvm/org/apache/storm/daemon/Acker.java#L97-L103
+
+Were never deleted from the map.
+
+This leak eventually made the ackers crash, and when they came back up the other components kept blasting them with messages that would never be fully acked which also leaked because of the tick problem.
+
+Looking back this has been in every release since 0.9.1-incubating.  It appears to have been introduced by https://github.com/apache/storm/commit/483ce454a3b2cd31b5d1c34e9365346459b358a8
+
+So every apache release has this problem (which is the only reason I have not marked this as a blocker, because apparently it is not so bad that anyone has noticed in the past 4 years)."
+STORM-2779,NPE on shutting down WindowedBoltExecutor,"STORM-2724 introduced a bug on WindowedBoltExecutor which throws NPE when shutting down WindowedBoltExecutor which has waterMarkEventGenerator field as null.
+
+https://github.com/apache/storm/blob/master/storm-client/src/jvm/org/apache/storm/topology/WindowedBoltExecutor.java#L330
+
+"
+STORM-2767,Surefire now truncates too much of the stack trace,"Surefire is truncating so much of the stack trace when tests fail that we often can't easily spot the error. As an example I manually threw an NPE from storm-kafka-client's KafkaSpout.commit() method, and here are the stack traces with trimStackTrace enabled and disabled:
+
+trimmed
+{code}
+testCommitSuccessWithOffsetVoids(org.apache.storm.kafka.spout.KafkaSpoutCommitTest)  Time elapsed: 0.714 sec  <<< ERROR!
+java.lang.NullPointerException: This is an NPE from inside nextTuple
+	at org.apache.storm.kafka.spout.KafkaSpoutCommitTest.testCommitSuccessWithOffsetVoids(KafkaSpoutCommitTest.java:87)
+{code}
+
+not trimmed
+{code}
+testCommitSuccessWithOffsetVoids(org.apache.storm.kafka.spout.KafkaSpoutCommitTest)  Time elapsed: 0.78 sec  <<< ERROR!
+java.lang.NullPointerException: This is an NPE from inside nextTuple
+	at org.apache.storm.kafka.spout.KafkaSpout.commit(KafkaSpout.java:266)
+	at org.apache.storm.kafka.spout.KafkaSpout.nextTuple(KafkaSpout.java:235)
+	at org.apache.storm.kafka.spout.KafkaSpoutCommitTest.testCommitSuccessWithOffsetVoids(KafkaSpoutCommitTest.java:87)
+	at sun.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+	at sun.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62)
+	at sun.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.lang.reflect.Method.invoke(Method.java:498)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:47)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:44)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.internal.runners.statements.RunBefores.evaluate(RunBefores.java:26)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:271)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:70)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:50)
+	at org.junit.runners.ParentRunner$3.run(ParentRunner.java:238)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:63)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:236)
+	at org.junit.runners.ParentRunner.access$000(ParentRunner.java:53)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:229)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:309)
+	at org.junit.runners.Suite.runChild(Suite.java:127)
+	at org.junit.runners.Suite.runChild(Suite.java:26)
+	at org.junit.runners.ParentRunner$3.run(ParentRunner.java:238)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:63)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:236)
+	at org.junit.runners.ParentRunner.access$000(ParentRunner.java:53)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:229)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:309)
+	at org.apache.maven.surefire.junitcore.JUnitCore.run(JUnitCore.java:55)
+	at org.apache.maven.surefire.junitcore.JUnitCoreWrapper.createRequestAndRun(JUnitCoreWrapper.java:137)
+	at org.apache.maven.surefire.junitcore.JUnitCoreWrapper.executeEager(JUnitCoreWrapper.java:107)
+	at org.apache.maven.surefire.junitcore.JUnitCoreWrapper.execute(JUnitCoreWrapper.java:83)
+	at org.apache.maven.surefire.junitcore.JUnitCoreWrapper.execute(JUnitCoreWrapper.java:75)
+	at org.apache.maven.surefire.junitcore.JUnitCoreProvider.invoke(JUnitCoreProvider.java:161)
+	at org.apache.maven.surefire.booter.ForkedBooter.invokeProviderInSameClassLoader(ForkedBooter.java:290)
+	at org.apache.maven.surefire.booter.ForkedBooter.runSuitesInProcess(ForkedBooter.java:242)
+	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:121)
+{code}
+
+Note how the trimmed stack trace is also removing the trace lines from inside KafkaSpout.
+
+As part of fixing https://issues.apache.org/jira/browse/STORM-2734 we upgraded to Surefire 2.19.1. It seems like 2.19 switched to a different interpretation of trimStackTrace, which trims all lines outside the test. It's my impression that it used to only trim lines before the trace reached a line inside the test. Going by https://issues.apache.org/jira/browse/SUREFIRE-1226?focusedCommentId=15140710&page=com.atlassian.jira.plugin.system.issuetabpanels:comment-tabpanel#comment-15140710, this change seems intentional.
+
+We should either downgrade Surefire, or disable stack trace trimming."
+STORM-2764,HDFSBlobStore leaks file system objects,"This impacts all of the releases.  Each time we create a new HDFSBlobStore instance we call 
+
+https://github.com/apache/storm/blob/v1.0.0/external/storm-hdfs/src/main/java/org/apache/storm/hdfs/blobstore/HdfsBlobStore.java#L140
+
+loginUserFromKeytab.
+
+This results in a new subject being created each time when ends up causing a FileSystem object to leak each time."
+STORM-2518,NPE during uploading dependency artifacts with secured cluster,"While adding ACL to USER from uploading artifacts, ""name"" field is actually optional for thrift specification, but Nimbus reads the value without checking null while fixing ACL.
+
+{code}
+2017-05-16 14:57:02.527 o.a.s.t.s.TThreadPoolServer pool-45-thread-136 [ERROR] Error occurred during processing of message.
+java.lang.NullPointerException: null
+        at org.apache.storm.blobstore.BlobStoreAclHandler.fixACLsForUser(BlobStoreAclHandler.java:382) ~[storm-core-1.1.0.2.6.0.2-SNAPSHOT.jar:1.1.0.2.6.0.2-SNAPSHOT]
+        at org.apache.storm.blobstore.BlobStoreAclHandler.normalizeSettableACLs(BlobStoreAclHandler.java:357) ~[storm-core-1.1.0.2.6.0.2-SNAPSHOT.jar:1.1.0.2.6.0.2-SNAPSHOT]
+        at org.apache.storm.blobstore.BlobStoreAclHandler.normalizeSettableBlobMeta(BlobStoreAclHandler.java:306) ~[storm-core-1.1.0.2.6.0.2-SNAPSHOT.jar:1.1.0.2.6.0.2-SNAPSHOT]
+        at org.apache.storm.blobstore.LocalFsBlobStore.createBlob(LocalFsBlobStore.java:103) ~[storm-core-1.1.0.2.6.0.2-SNAPSHOT.jar:1.1.0.2.6.0.2-SNAPSHOT]
+        at sun.reflect.NativeMethodAccessorImpl.invoke0(Native Method) ~[?:1.8.0_112]
+        at sun.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62) ~[?:1.8.0_112]
+        at sun.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43) ~[?:1.8.0_112]
+        at java.lang.reflect.Method.invoke(Method.java:498) ~[?:1.8.0_112]
+        at clojure.lang.Reflector.invokeMatchingMethod(Reflector.java:93) ~[clojure-1.7.0.jar:?]
+        at clojure.lang.Reflector.invokeInstanceMethod(Reflector.java:28) ~[clojure-1.7.0.jar:?]
+        at org.apache.storm.daemon.nimbus$mk_reified_nimbus$reify__9064.beginCreateBlob(nimbus.clj:2047) ~[storm-core-1.1.0.2.6.0.2-SNAPSHOT.jar:1.1.0.2.6.0.2-SNAPSHOT]
+        at org.apache.storm.generated.Nimbus$Processor$beginCreateBlob.getResult(Nimbus.java:3430) ~[storm-core-1.1.0.2.6.0.2-SNAPSHOT.jar:1.1.0.2.6.0.2-SNAPSHOT]
+        at org.apache.storm.generated.Nimbus$Processor$beginCreateBlob.getResult(Nimbus.java:3414) ~[storm-core-1.1.0.2.6.0.2-SNAPSHOT.jar:1.1.0.2.6.0.2-SNAPSHOT]
+        at org.apache.storm.thrift.ProcessFunction.process(ProcessFunction.java:39) ~[storm-core-1.1.0.2.6.0.2-SNAPSHOT.jar:1.1.0.2.6.0.2-SNAPSHOT]
+        at org.apache.storm.thrift.TBaseProcessor.process(TBaseProcessor.java:39) ~[storm-core-1.1.0.2.6.0.2-SNAPSHOT.jar:1.1.0.2.6.0.2-SNAPSHOT]
+        at org.apache.storm.security.auth.SaslTransportPlugin$TUGIWrapProcessor.process(SaslTransportPlugin.java:144) ~[storm-core-1.1.0.2.6.0.2-SNAPSHOT.jar:1.1.0.2.6.0.2-SNAPSHOT]
+        at org.apache.storm.thrift.server.TThreadPoolServer$WorkerProcess.run(TThreadPoolServer.java:286) ~[storm-core-1.1.0.2.6.0.2-SNAPSHOT.jar:1.1.0.2.6.0.2-SNAPSHOT]
+        at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1142) [?:1.8.0_112]
+        at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:617) [?:1.8.0_112]
+        at java.lang.Thread.run(Thread.java:745) [?:1.8.0_112]
+{code}
+
+Uploading artifacts fails and topology submission also fails."
+STORM-2513,NPE possible in getLeader call,"The getLeader call actually reads data from two different locations
+
+https://github.com/apache/storm/blob/v1.1.0/storm-core/src/clj/org/apache/storm/daemon/nimbus.clj#L2371-L2385
+
+One is /leader-lock and the other is /nimbuses.  There is a really rare possibility that these two can get out of sync when the leader crashes and we read from leader election saying it is still the leader, but after that it's entry is removed from ZK for /nimbuses.  So we either need to make them not be separate entries, or we need to add in some kind of a retry when this happens.
+
+Also NimbusClient has not retry built in.  Not all operations are idempotent, but we really should look at adding a retry with possibly switching to a new nimbus on idempotent operations."
+STORM-2497,Support Shared Memory Scheduling in RAS,"In some cases bolt and or spouts can share memory, but the scheduler has not good way to express that.  We should be able to support this."
+STORM-2484,Flux: support bolt+spout memory configuration,"Storm has features to tune memory and CPU settings on a per-bolt or per-spout basis, with the setMemoryLoad and setCPULoad functions: https://storm.apache.org/releases/1.1.0/javadocs/index.html
+
+Flux doesn't appear to support these features"
+STORM-2444,Nimbus sometimes throws NPE when clicking show topology visualization button,"Here's error message from Nimbus (containing stack trace): 
+
+{code}
+{""error"":""Internal Server Error"",""errorMessage"":""java.lang.NullPointerException\n\tat org.apache.storm.stats.StatsUtil.mergeWithAddPair(StatsUtil.java:1997)\n\tat org.apache.storm.stats.StatsUtil.expandAveragesSeq(StatsUtil.java:2511)\n\tat org.apache.storm.stats.StatsUtil.aggregateAverages(StatsUtil.java:877)\n\tat org.apache.storm.stats.StatsUtil.aggregateBoltStats(StatsUtil.java:776)\n\tat org.apache.storm.stats.StatsUtil.boltStreamsStats(StatsUtil.java:942)\n\tat org.apache.storm.ui.core$visualization_data$iter__3002__3006$fn__3007.invoke(core.clj:239)\n\tat clojure.lang.LazySeq.sval(LazySeq.java:40)\n\tat clojure.lang.LazySeq.seq(LazySeq.java:49)\n\tat clojure.lang.Cons.next(Cons.java:39)\n\tat clojure.lang.RT.next(RT.java:674)\n\tat clojure.core$next__4112.invoke(core.clj:64)\n\tat clojure.core$dorun.invoke(core.clj:3010)\n\tat clojure.core$doall.invoke(core.clj:3025)\n\tat org.apache.storm.ui.core$visualization_data.invoke(core.clj:268)\n\tat org.apache.storm.ui.core$build_visualization.invoke(core.clj:591)\n\tat org.apache.storm.ui.core$fn__3641.invoke(core.clj:1204)\n\tat org.apache.storm.shade.compojure.core$make_route$fn__324.invoke(core.clj:100)\n\tat org.apache.storm.shade.compojure.core$if_route$fn__312.invoke(core.clj:46)\n\tat org.apache.storm.shade.compojure.core$if_method$fn__305.invoke(core.clj:31)\n\tat org.apache.storm.shade.compojure.core$routing$fn__330.invoke(core.clj:113)\n\tat clojure.core$some.invoke(core.clj:2570)\n\tat org.apache.storm.shade.compojure.core$routing.doInvoke(core.clj:113)\n\tat clojure.lang.RestFn.applyTo(RestFn.java:139)\n\tat clojure.core$apply.invoke(core.clj:632)\n\tat org.apache.storm.shade.compojure.core$routes$fn__334.invoke(core.clj:118)\n\tat org.apache.storm.shade.ring.middleware.json$wrap_json_params$fn__1383.invoke(json.clj:56)\n\tat org.apache.storm.shade.ring.middleware.multipart_params$wrap_multipart_params$fn__918.invoke(multipart_params.clj:118)\n\tat org.apache.storm.shade.ring.middleware.reload$wrap_reload$fn__747.invoke(reload.clj:22)\n\tat org.apache.storm.ui.helpers$requests_middleware$fn__2903.invoke(helpers.clj:54)\n\tat org.apache.storm.ui.core$catch_errors$fn__3813.invoke(core.clj:1462)\n\tat org.apache.storm.shade.ring.middleware.keyword_params$wrap_keyword_params$fn__2632.invoke(keyword_params.clj:35)\n\tat org.apache.storm.shade.ring.middleware.nested_params$wrap_nested_params$fn__2675.invoke(nested_params.clj:84)\n\tat org.apache.storm.shade.ring.middleware.params$wrap_params$fn__2604.invoke(params.clj:64)\n\tat org.apache.storm.shade.ring.middleware.multipart_params$wrap_multipart_params$fn__918.invoke(multipart_params.clj:118)\n\tat org.apache.storm.shade.ring.middleware.flash$wrap_flash$fn__2890.invoke(flash.clj:35)\n\tat org.apache.storm.shade.ring.middleware.session$wrap_session$fn__2876.invoke(session.clj:98)\n\tat org.apache.storm.shade.ring.util.servlet$make_service_method$fn__2498.invoke(servlet.clj:127)\n\tat org.apache.storm.shade.ring.util.servlet$servlet$fn__2502.invoke(servlet.clj:136)\n\tat org.apache.storm.shade.ring.util.servlet.proxy$javax.servlet.http.HttpServlet$ff19274a.service(Unknown Source)\n\tat org.apache.storm.shade.org.eclipse.jetty.servlet.ServletHolder.handle(ServletHolder.java:654)\n\tat org.apache.storm.shade.org.eclipse.jetty.servlet.ServletHandler$CachedChain.doFilter(ServletHandler.java:1320)\n\tat org.apache.storm.logging.filters.AccessLoggingFilter.handle(AccessLoggingFilter.java:47)\n\tat org.apache.storm.logging.filters.AccessLoggingFilter.doFilter(AccessLoggingFilter.java:39)\n\tat org.apache.storm.shade.org.eclipse.jetty.servlet.ServletHandler$CachedChain.doFilter(ServletHandler.java:1291)\n\tat org.apache.storm.shade.org.eclipse.jetty.servlets.CrossOriginFilter.handle(CrossOriginFilter.java:247)\n\tat org.apache.storm.shade.org.eclipse.jetty.servlets.CrossOriginFilter.doFilter(CrossOriginFilter.java:210)\n\tat org.apache.storm.shade.org.eclipse.jetty.servlet.ServletHandler$CachedChain.doFilter(ServletHandler.java:1291)\n\tat org.apache.storm.shade.org.eclipse.jetty.servlet.ServletHandler.doHandle(ServletHandler.java:443)\n\tat org.apache.storm.shade.org.eclipse.jetty.server.handler.ContextHandler.doHandle(ContextHandler.java:1044)\n\tat org.apache.storm.shade.org.eclipse.jetty.servlet.ServletHandler.doScope(ServletHandler.java:372)\n\tat org.apache.storm.shade.org.eclipse.jetty.server.handler.ContextHandler.doScope(ContextHandler.java:978)\n\tat org.apache.storm.shade.org.eclipse.jetty.server.handler.ScopedHandler.handle(ScopedHandler.java:135)\n\tat org.apache.storm.shade.org.eclipse.jetty.server.handler.HandlerWrapper.handle(HandlerWrapper.java:116)\n\tat org.apache.storm.shade.org.eclipse.jetty.server.Server.handle(Server.java:369)\n\tat org.apache.storm.shade.org.eclipse.jetty.server.AbstractHttpConnection.handleRequest(AbstractHttpConnection.java:486)\n\tat org.apache.storm.shade.org.eclipse.jetty.server.AbstractHttpConnection.headerComplete(AbstractHttpConnection.java:933)\n\tat org.apache.storm.shade.org.eclipse.jetty.server.AbstractHttpConnection$RequestHandler.headerComplete(AbstractHttpConnection.java:995)\n\tat org.apache.storm.shade.org.eclipse.jetty.http.HttpParser.parseNext(HttpParser.java:644)\n\tat org.apache.storm.shade.org.eclipse.jetty.http.HttpParser.parseAvailable(HttpParser.java:235)\n\tat org.apache.storm.shade.org.eclipse.jetty.server.AsyncHttpConnection.handle(AsyncHttpConnection.java:82)\n\tat org.apache.storm.shade.org.eclipse.jetty.io.nio.SelectChannelEndPoint.handle(SelectChannelEndPoint.java:668)\n\tat org.apache.storm.shade.org.eclipse.jetty.io.nio.SelectChannelEndPoint$1.run(SelectChannelEndPoint.java:52)\n\tat org.apache.storm.shade.org.eclipse.jetty.util.thread.QueuedThreadPool.runJob(QueuedThreadPool.java:608)\n\tat org.apache.storm.shade.org.eclipse.jetty.util.thread.QueuedThreadPool$3.run(QueuedThreadPool.java:543)\n\tat java.lang.Thread.run(Thread.java:745)\n""}
+{code}"
+STORM-2430,Potential Race condition in Kafka Spout,"Kafka spout hangs when the number of uncommitted messages exceeds the max allowed uncommitted messages and some intermediate tuples have failed in down stream bolt.
+
+Steps of reproduction.
+Create a simple topology with one kafka spout and a slow bolt. 
+In kafka spout set the maximum uncommitted messages to a small number like 100.
+Bolt should process 10 tuples in second. And program it to fail on some random tuples. For eg: say tuple number 10 fails. Also assume  there is only 1 Kafka partition the spout reads from.
+
+Spout on first execution of nextTuple() gets 110 records and emits them. At this point number of uncommitted message would be 110.
+First 9 tuples are acked by the bolt. 10th tuple is failed by the bolt. KafkaSpout puts it on retry queue.
+Tuple number 11 to 110 are acked by bolt . But spout only commits till offset 9.[link | https://github.com/apache/storm/blob/1.0.x-branch/external/storm-kafka-client/src/main/java/org/apache/storm/kafka/spout/KafkaSpout.java#L510]
+
+Now, the number of uncommitted  messages = 110 - 9 = 101 > 100 (max allowed uncommitted messages)
+No new records are polled from kafka.[link | https://github.com/apache/storm/blob/1.0.x-branch/external/storm-kafka-client/src/main/java/org/apache/storm/kafka/spout/KafkaSpout.java#L239]. The spout is stuck as the nothing is polled. 
+
+Solution is to explicitly go through retry queue explicitly and emit tuples that are ready on every nextTuple().
+"
+STORM-2356,Storm-HDFS: NPE on empty & stale lock file,"In HDFSSpout a NPE can occur if a stale lock file is empty.
+
+{{LogEntry.deserialize}} tries to split the line by colons.
+If the line is null, the split will cause a NPE:
+https://github.com/apache/storm/blob/master/external/storm-hdfs/src/main/java/org/apache/storm/hdfs/spout/FileLock.java#L179
+
+Moreover the callee of {{getLastEntry}} is also mishandling empty log files.
+The {{lastEntry.eventTime}} could also cause a NPE if the above scenario is passed and the log file is empty:
+https://github.com/apache/storm/blob/master/external/storm-hdfs/src/main/java/org/apache/storm/hdfs/spout/FileLock.java#L149-L160"
+STORM-2312,Memory Management,"Refer to this Doc for details
+
+https://docs.google.com/document/d/1a-RLv1KKBn2vVliztLcdfC-5vDStxpNlR0ZLu33lwxg/edit?usp=sharing"
+STORM-2306,"Redesign Messaging Subsystem, switch to JCTools Queues and introduce new Backpressure model","Details in these documents:
+
+1) *Redesign of the messaging subsystem*
+https://docs.google.com/document/d/1NK1DJ3aAkta-Im0m-2FObQ4cSRp8xSa301y6zoqcBeE/edit?usp=sharing
+This doc discusses the new design for the messaging system. Plus some of the optimizations being made.
+
+2) *Choosing a high performance messaging queue:*
+https://docs.google.com/document/d/1PpQaWVHg06-OqxTzYxQlzg1yEhzA4Y46_NC7HMO6tsI/edit?usp=sharing
+This doc looks into how fast hardware can do inter-thread messaging and why we chose the JCTools queues.
+
+3) *Backpressure Model*
+https://docs.google.com/document/d/1Z9pRdI5wtnK-hVwE3Spe6VGCTsz9g8TkgxbTFcbL3jM/edit?usp=sharing
+Describes the Backpressure model integrated into the new messaging subsystem."
+STORM-2272,LocalCluster can leak simulated time,If the constructor for LocalCluster throws an exception while configured for simulated time it can leak the simulated time and leave it on.
+STORM-2222,Repeated NPEs thrown in nimbus if rebalance fails,"If the nimbus daemon crashed during a rebalance (rebalance didn't finish yet) and the daemon is restarted, it will always throw NPEs afterwards due to the wait time secs being gone after the restart. "
+STORM-2205,Racecondition in getting nimbus summaries while ZK connections are reconnected.,
+STORM-2197,NimbusClient connectins leak due to leakage in ThriftClient.,"Nimbus client connections are not closed when there are errors while connecting to nimbus. Created TSocket in ThriftClient should have been closed in case of errors.
+
+2016-11-03 08:09:37.766 b.s.s.a.k.KerberosSaslTransportPlugin [ERROR] Client failed to open SaslClientTransport to interact with a server during session initiation: org.apache.thrift7.transport.TTransportException: Peer indicated failure: GSS initiate failed
+org.apache.thrift7.transport.TTransportException: Peer indicated failure: GSS initiate failed
+	at org.apache.thrift7.transport.TSaslTransport.receiveSaslMessage(TSaslTransport.java:199) ~[storm-core-2.4.2-debug-patch.jar:0.10.0-SNAPSHOT]
+	at org.apache.thrift7.transport.TSaslTransport.open(TSaslTransport.java:277) ~[storm-core-2.4.2-debug-patch.jar:0.10.0-SNAPSHOT]
+	at org.apache.thrift7.transport.TSaslClientTransport.open(TSaslClientTransport.java:37) ~[storm-core-2.4.2-debug-patch.jar:0.10.0-SNAPSHOT]
+	at backtype.storm.security.auth.kerberos.KerberosSaslTransportPlugin$1.run(KerberosSaslTransportPlugin.java:145) [storm-core-2.4.2-debug-patch.jar:0.10.0-SNAPSHOT]
+	at backtype.storm.security.auth.kerberos.KerberosSaslTransportPlugin$1.run(KerberosSaslTransportPlugin.java:141) [storm-core-2.4.2-debug-patch.jar:0.10.0-SNAPSHOT]
+	at java.security.AccessController.doPrivileged(Native Method) ~[?:1.7.0_60]
+	at javax.security.auth.Subject.doAs(Subject.java:415) [?:1.7.0_60]
+	at backtype.storm.security.auth.kerberos.KerberosSaslTransportPlugin.connect(KerberosSaslTransportPlugin.java:140) [storm-core-2.4.2-debug-patch.jar:0.10.0-SNAPSHOT]
+	at backtype.storm.security.auth.TBackoffConnect.doConnectWithRetry(TBackoffConnect.java:48) [storm-core-2.4.2-debug-patch.jar:0.10.0-SNAPSHOT]
+	at backtype.storm.security.auth.ThriftClient.reconnect(ThriftClient.java:103) [storm-core-2.4.2-debug-patch.jar:0.10.0-SNAPSHOT]
+	at backtype.storm.security.auth.ThriftClient.<init>(ThriftClient.java:72) [storm-core-2.4.2-debug-patch.jar:0.10.0-SNAPSHOT]
+	at backtype.storm.utils.NimbusClient.<init>(NimbusClient.java:106) [storm-core-2.4.2-debug-patch.jar:0.10.0-SNAPSHOT]
+	at backtype.storm.utils.NimbusClient.getConfiguredClientAs(NimbusClient.java:82) [storm-core-2.4.2-debug-patch.jar:0.10.0-SNAPSHOT]
+	at backtype.storm.ui.core$nimbus_summary.invoke(core.clj:584) [storm-core-2.4.2-debug-patch.jar:0.10.0-SNAPSHOT]
+	at backtype.storm.ui.core$fn__10334.invoke(core.clj:1009) [storm-core-2.4.2-debug-patch.jar:0.10.0-SNAPSHOT]
+	at compojure.core$make_route$fn__7476.invoke(core.clj:93) [storm-core-2.4.2-debug-patch.jar:0.10.0-SNAPSHOT]
+	at compojure.core$if_route$fn__7464.invoke(core.clj:39) [storm-core-2.4.2-debug-patch.jar:0.10.0-SNAPSHOT]
+	at compojure.core$if_method$fn__7457.invoke(core.clj:24) [storm-core-2.4.2-debug-patch.jar:0.10.0-SNAPSHOT]
+	at compojure.core$routing$fn__7482.invoke(core.clj:106) [storm-core-2.4.2-debug-patch.jar:0.10.0-SNAPSHOT]
+	at clojure.core$some.invoke(core.clj:2515) [clojure-1.6.0.jar:?]"
+STORM-2171,blob recovery on a single host results in deadlock,"It might be more versions but I have only tested this on 2.x.
+
+Essentially when trying to find replicas to copy blobs from LocalFSBlobStore does not exclude itself.  This results in a deadlock where it is holding a lock trying to download the blob, and at the same time has done a request back to itself trying to download the blob, but it will never finish because it is blocked on the same lock."
+STORM-2158,OutOfMemoryError in Nimbus' SimpleTransportPlugin,"{{OutOfMemoryError}} is thrown by Nimbus' {{SimpleTransportPlugin}} if malformed Thrift request is posted:
+{code}
+echo ""Hello"" | nc localhost 6627
+{code}
+
+In nimbus.log:
+{noformat}
+2016-10-20 12:54:09.978 b.s.d.nimbus [INFO] Starting Nimbus server...
+2016-10-20 12:54:42.926 o.a.t.s.THsHaServer [ERROR] run() exiting due to uncaught error
+java.lang.OutOfMemoryError: Java heap space
+	at java.nio.HeapByteBuffer.<init>(HeapByteBuffer.java:57) ~[?:1.8.0_92-internal]
+	at java.nio.ByteBuffer.allocate(ByteBuffer.java:335) ~[?:1.8.0_92-internal]
+	at org.apache.thrift7.server.AbstractNonblockingServer$FrameBuffer.read(AbstractNonblockingServer.java:371) ~[storm-core-0.10.3-SNAPSHOT.jar:0.10.3-SNAPSHOT]
+	at org.apache.thrift7.server.AbstractNonblockingServer$AbstractSelectThread.handleRead(AbstractNonblockingServer.java:203) ~[storm-core-0.10.3-SNAPSHOT.jar:0.10.3-SNAPSHOT]
+	at org.apache.thrift7.server.TNonblockingServer$SelectAcceptThread.select(TNonblockingServer.java:207) ~[storm-core-0.10.3-SNAPSHOT.jar:0.10.3-SNAPSHOT]
+	at org.apache.thrift7.server.TNonblockingServer$SelectAcceptThread.run(TNonblockingServer.java:158) [storm-core-0.10.3-SNAPSHOT.jar:0.10.3-SNAPSHOT]
+2016-10-20 12:54:42.942 b.s.d.nimbus [INFO] Shutting down master
+2016-10-20 12:54:43.003 b.s.d.nimbus [INFO] Shut down master
+{noformat}
+
+The problem is caused by the lack of specification of the {{maxReadBufferBytes}} of {{THsHaServer}}'s arguments."
+STORM-2109,Under supervisor V2 SUPERVISOR_MEMORY_CAPACITY_MB and SUPERVISOR_CPU_CAPACITY must be Doubles,"Just found this rolling out Supervisor V2 to staging env, but it is a simple fix."
+STORM-2076,Supervisor sync-processes and sync-supervisor race when downloading new topology code.,"The fix for https://issues.apache.org/jira/browse/STORM-1934 moved the cleanup of topology code to sync-processes. The cleanup is based on ls-local-assignment, but this is not called from sync-supervisor until all the new topology code has been downloaded. As a result, sync-processes may delete new topology code before sync-supervisor has had a chance to update ls-local-assignment."
+STORM-2045,NPE in SpoutExecutor in 2.0 branch,"This issue was raised in [STORM-1949], but since the original issue mainly discusses about whether to disable ABP by default, I'd like to pick this NPE as another issue."
+STORM-1934,Race condition between sync-supervisor and sync-processes raises several strange issues,"There're some strange issues including STORM-1933 and others (which I will file an issue soon) which are related to race condition in supervisor.
+
+As I mentioned to STORM-1933, basically sync-supervisor relies on zk assignment, and sync-processes relies on local assignment and local workers directory, but in fact sync-supervisor also access local state and take some actions which affects sync-processes. And also Satish left the comment to STORM-1933 describing other issue related to race condition and idea to fix this which is same page on me.
+
+"
+STORM-1775,Generate StormParserImpl before maven building instead of in packaging time,"Just like genthrift.sh genrates the generated thrift-about java source files. I think it is better generate StormParserImpl.java before maven execution.
+
+It can reduce the complexity of storm-sql."
+STORM-1669,Fix SolrUpdateBolt flush bug,"SolrUpdateBolt is setting the default tick tuple interval in the prepare() method, which is not taking effect.
+This issue is the same as https://issues.apache.org/jira/browse/STORM-1219 and https://issues.apache.org/jira/browse/STORM-1654."
+STORM-1654,HBaseBolt creates tick tuples with no interval when we don't set flushIntervalSecs  ,"As STORM-1219 addressed, we can't get value about topology's message timeout seconds at getComponentConfiguration(), so logic for applying flush interval to the half of message timeout is no effect.
+Unless we set flushIntervalSeconds explicitly, tick tuple interval is set to 0 second, no interval.
+
+Other bolts were fixed as STORM-1219, but seems missing HBaseBolt."
+STORM-1575,TwitterSampleSpout throws NPE on close,"the global ""_twitterStream"" is not initialized in ""open"" but used in ""close"""
+STORM-1567,in defaults.yaml  'topology.disable.loadaware' should be 'topology.disable.loadaware.messaging',"{code:title=defaults.yaml|borderStyle=solid}
+diff --git a/conf/defaults.yaml b/conf/defaults.yaml
+index 166b249..01821e1 100644
+--- a/conf/defaults.yaml
++++ b/conf/defaults.yaml
+@@ -256,7 +256,7 @@ topology.bolts.outgoing.overflow.buffer.enable: false
+ topology.disruptor.wait.timeout.millis: 1000
+ topology.disruptor.batch.size: 100
+ topology.disruptor.batch.timeout.millis: 1
+-topology.disable.loadaware: false
++topology.disable.loadaware.messaging: false
+ topology.state.checkpoint.interval.ms: 1000
+ 
+ # Configs for Resource Aware Scheduler
+{code}"

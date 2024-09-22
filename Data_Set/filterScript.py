@@ -19,8 +19,8 @@ def filter_public_classes(input_csv, output_csv):
         writer.writerows(public_classes)  # Write the filtered rows
 
 if __name__ == '__main__':
-    input_csv_file = '/Users/gaurav/Documents/cassandra/cassandrametricsmidsem.csv'  # Replace with the actual path to your input CSV file
-    output_csv_file = '/Users/gaurav/Documents/cassandra/cassandrametricsmidsemfinal.csv'  # Replace with the desired path to save the output CSV
+    input_csv_file = '/Users/gaurav/hive/llap-ext-client/src/java/org/apache/hadoop/hive/hivemidsem.csv'  # Replace with the actual path to your input CSV file
+    output_csv_file = '/Users/gaurav/hive/llap-ext-client/src/java/org/apache/hadoop/hive/hivemidsemfinal.csv'  # Replace with the desired path to save the output CSV
     filter_public_classes(input_csv_file, output_csv_file)
 
     print(f"Filtered CSV saved as {output_csv_file}")

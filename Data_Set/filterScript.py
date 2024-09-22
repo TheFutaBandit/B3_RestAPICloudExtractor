@@ -1,5 +1,6 @@
 import csv
 
+##hive
 def filter_public_classes(input_csv, output_csv):
     with open(input_csv, 'r') as csvfile:
         reader = csv.DictReader(csvfile)
@@ -19,8 +20,8 @@ def filter_public_classes(input_csv, output_csv):
         writer.writerows(public_classes)  # Write the filtered rows
 
 if __name__ == '__main__':
-    input_csv_file = '/Users/gaurav/Documents/hadoop-mapreduce/hadoop-mapreduce.csv'  # Replace with the actual path to your input CSV file
-    output_csv_file = '/Users/gaurav/Documents/hadoop-mapreduce/hadoop-mapreducedmidsemfinal.csv'  # Replace with the desired path to save the output CSV
+    input_csv_file = './raw_datasets/Hive.csv'  # Replace with the actual path to your input CSV file
+    output_csv_file = './filteredDatasets/HiveFiltered.csv'  # Replace with the desired path to save the output CSV
     filter_public_classes(input_csv_file, output_csv_file)
 
     print(f"Filtered CSV saved as {output_csv_file}")
